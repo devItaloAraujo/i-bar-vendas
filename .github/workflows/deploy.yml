@@ -1,9 +1,12 @@
 name: Deploy to GitHub Pages
 
+# Deploy manual via: npm run deploy (push para gh-pages)
+# Este workflow está desativado (runners do GitHub instáveis).
+# Para ativar de novo, descomente o "push" abaixo.
 on:
-  push:
-    branches: [main, master]
-  workflow_dispatch:
+  # push:
+  #   branches: [main, master]
+  workflow_dispatch:  # só roda se você clicar "Run workflow" em Actions
 
 permissions:
   contents: read
