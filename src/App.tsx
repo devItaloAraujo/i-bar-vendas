@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { MdAdd, MdClose, MdReceipt, MdTableRestaurant, MdHistory, MdSettings, MdSearch, MdRestaurantMenu, MdEdit } from 'react-icons/md'
+import { MdAdd, MdClose, MdReceipt, MdTableRestaurant, MdHistory, MdSettings, MdSearch, MdRestaurantMenu, MdEdit, MdPictureAsPdf } from 'react-icons/md'
+import { jsPDF } from 'jspdf'
+import autoTable from 'jspdf-autotable'
 import {
   getMenu,
   getTables,
@@ -73,6 +75,7 @@ function formatDate(iso: string) {
 }
 
 type TabId = 'mesas' | 'historico' | 'produtos'
+type RelatorioPeriodo = '24h' | '48h' | 'semana' | 'mes_atual' | 'mes_anterior'
 
 export default function App() {
   const [menu, setMenu] = useState<MenuCategory[]>([])
@@ -113,6 +116,9 @@ export default function App() {
   const [showWelcome, setShowWelcome] = useState(true)
   const [welcomeExiting, setWelcomeExiting] = useState(false)
   const [historicoPaymentFilter, setHistoricoPaymentFilter] = useState<string | null>(null)
+  const [relatorioModalOpen, setRelatorioModalOpen] = useState(false)
+  const [relatorioTipo, setRelatorioTipo] = useState<'completo' | 'credito' | 'anotado' | null>('completo')
+  const [relatorioPeriodo, setRelatorioPeriodo] = useState<RelatorioPeriodo>('24h')
   const [categoriesWithItems, setCategoriesWithItems] = useState<CategoryWithItems[]>([])
   const [newCategoryOpen, setNewCategoryOpen] = useState(false)
   const [newCategoryName, setNewCategoryName] = useState('')
@@ -297,6 +303,136 @@ export default function App() {
   const tableTotal = (t: Table) => t.orders.reduce((s, o) => s + o.amount, 0)
   const historyEntryTotal = (e: HistoryEntry) => e.orders.reduce((s, o) => s + o.amount, 0)
 
+  function filterHistoryByPeriod(entries: HistoryEntry[], period: RelatorioPeriodo): HistoryEntry[] {
+    const now = Date.now()
+    const cut24 = now - 24 * 60 * 60 * 1000
+    const cut48 = now - 48 * 60 * 60 * 1000
+    const cutSemana = now - 7 * 24 * 60 * 60 * 1000
+    const today = new Date()
+    const firstDayMesAtual = new Date(today.getFullYear(), today.getMonth(), 1).getTime()
+    const lastDayMesAtual = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999).getTime()
+    const firstDayMesAnterior = new Date(today.getFullYear(), today.getMonth() - 1, 1).getTime()
+    const lastDayMesAnterior = new Date(today.getFullYear(), today.getMonth(), 0, 23, 59, 59, 999).getTime()
+    return entries.filter((e) => {
+      const t = new Date(e.paidAt).getTime()
+      switch (period) {
+        case '24h': return t >= cut24
+        case '48h': return t >= cut48
+        case 'semana': return t >= cutSemana
+        case 'mes_atual': return t >= firstDayMesAtual && t <= lastDayMesAtual
+        case 'mes_anterior': return t >= firstDayMesAnterior && t <= lastDayMesAnterior
+        default: return true
+      }
+    })
+  }
+
+  function generateRelatorioPdf(tipo: 'completo' | 'credito' | 'anotado', period: RelatorioPeriodo) {
+    const byTipo =
+      tipo === 'credito'
+        ? history.filter((e) => (e.paymentMethod ?? '') === 'Crédito')
+        : tipo === 'anotado'
+          ? history.filter((e) => (e.paymentMethod ?? '') === 'Anotado na conta')
+          : [...history]
+    const filtered = filterHistoryByPeriod(byTipo, period)
+    const reversed = [...filtered].reverse()
+
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    let y = 18
+
+    const periodLabels: Record<RelatorioPeriodo, string> = {
+      '24h': 'Últimas 24 horas',
+      '48h': 'Últimas 48 horas',
+      semana: 'Última semana',
+      mes_atual: 'Mês corrente',
+      mes_anterior: 'Último mês',
+    }
+    const title =
+      tipo === 'completo'
+        ? 'Relatório completo de vendas'
+        : tipo === 'credito'
+          ? 'Relatório — vendas no crédito'
+          : 'Relatório — vendas anotadas na conta'
+    doc.setFontSize(16)
+    doc.text(title, 14, y)
+    y += 7
+    doc.setFontSize(10)
+    doc.text(`Período: ${periodLabels[period]}`, 14, y)
+    y += 6
+    doc.text(`Gerado em ${new Date().toLocaleString('pt-BR')}`, 14, y)
+    y += 8
+
+    if (tipo === 'completo' && reversed.length > 0) {
+      const totalGeral = reversed.reduce((s, e) => s + historyEntryTotal(e), 0)
+      doc.setFontSize(11)
+      doc.text(`Vendas totais: ${formatMoney(totalGeral)}`, 14, y)
+      y += 7
+      const byMethod = PAYMENT_METHODS.map((method) => ({
+        method,
+        total: filtered
+          .filter((e) => (e.paymentMethod ?? '') === method)
+          .reduce((s, e) => s + historyEntryTotal(e), 0),
+      })).filter((x) => x.total > 0)
+      byMethod.forEach(({ method, total }) => {
+        doc.setFontSize(10)
+        doc.text(`${method}: ${formatMoney(total)}`, 14, y)
+        y += 6
+      })
+      y += 4
+    } else if (reversed.length > 0) {
+      const totalFiltrado = reversed.reduce((s, e) => s + historyEntryTotal(e), 0)
+      doc.setFontSize(11)
+      doc.text(`Total: ${formatMoney(totalFiltrado)}`, 14, y)
+      y += 10
+    }
+
+    const tableData = reversed.map((entry) => [
+      formatDate(entry.paidAt),
+      entry.clientName,
+      formatMoney(historyEntryTotal(entry)),
+      entry.paymentMethod ?? '—',
+    ])
+
+    autoTable(doc, {
+      startY: y,
+      head: [['Data/Horário', 'Cliente', 'Valor', 'Método de pagamento']],
+      body: tableData,
+      margin: { left: 14, right: 14 },
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [255, 255, 255], textColor: [50, 50, 50], fontStyle: 'bold' },
+    })
+
+    doc.autoPrint()
+    const blob = doc.output('blob')
+    const url = URL.createObjectURL(blob)
+    const printWin = window.open(url, '_blank', 'noopener,noreferrer')
+    if (printWin) {
+      printWin.focus()
+      const tryPrint = () => {
+        try {
+          printWin.print()
+        } catch {
+          // ignore
+        }
+      }
+      const t = setTimeout(tryPrint, 800)
+      printWin.addEventListener('load', () => {
+        clearTimeout(t)
+        tryPrint()
+      }, { once: true })
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    } else {
+      doc.save(`relatorio-vendas-${tipo}-${new Date().toISOString().slice(0, 10)}.pdf`)
+      URL.revokeObjectURL(url)
+      setToasts((prev) => [...prev, { id: crypto.randomUUID(), message: 'Popup bloqueado — PDF guardado. Abra o ficheiro e use Ctrl+P para imprimir.', type: 'success' }])
+    }
+    setRelatorioModalOpen(false)
+    setRelatorioTipo(null)
+    setRelatorioPeriodo('24h')
+    if (printWin) {
+      setToasts((prev) => [...prev, { id: crypto.randomUUID(), message: 'Impressão aberta — imprima ou guarde como PDF', type: 'success' }])
+    }
+  }
+
   function dismissWelcome() {
     const isDesktop = window.matchMedia('(hover: hover) and (pointer: fine)').matches
     const isStandalone =
@@ -333,7 +469,12 @@ export default function App() {
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
-      if (closeAccountModal) {
+      if (relatorioModalOpen) {
+        e.preventDefault()
+        setRelatorioModalOpen(false)
+        setRelatorioTipo(null)
+        setRelatorioPeriodo('24h')
+      } else if (closeAccountModal) {
         e.preventDefault()
         setCloseAccountModal(null)
       } else if (removeConfirm) {
@@ -374,6 +515,7 @@ export default function App() {
       !!removeConfirm ||
       !!removeProductConfirm ||
       !!closeAccountModal ||
+      relatorioModalOpen ||
       newCategoryOpen ||
       newProductOpen ||
       !!editProductModal
@@ -383,7 +525,7 @@ export default function App() {
     return () => {
       document.body.style.overflow = prev
     }
-  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, newCategoryOpen, newProductOpen, editProductModal])
+  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, relatorioModalOpen, newCategoryOpen, newProductOpen, editProductModal])
 
   useEffect(() => {
     if (!newTableOpen) return
@@ -631,24 +773,36 @@ export default function App() {
           const showTotalByMethod = historicoPaymentFilter !== null && filteredHistory.length > 0
           return (
             <section className={`historico ${showTotalByMethod ? 'historico--has-total' : ''}`} id="panel-historico" role="tabpanel" aria-labelledby="tab-historico">
-              <div className="historico-filters">
+              <div className="historico-header-row">
+                <div className="historico-filters">
+                  <button
+                    type="button"
+                    className={`historico-filter-pill ${historicoPaymentFilter === null ? 'historico-filter-pill--active' : ''}`}
+                    onClick={() => setHistoricoPaymentFilter(null)}
+                  >
+                    Todos
+                  </button>
+                  {PAYMENT_METHODS.map((method) => (
+                    <button
+                      key={method}
+                      type="button"
+                      className={`historico-filter-pill ${historicoPaymentFilter === method ? 'historico-filter-pill--active' : ''}`}
+                      onClick={() => setHistoricoPaymentFilter(method)}
+                    >
+                      {method}
+                    </button>
+                  ))}
+                </div>
                 <button
                   type="button"
-                  className={`historico-filter-pill ${historicoPaymentFilter === null ? 'historico-filter-pill--active' : ''}`}
-                  onClick={() => setHistoricoPaymentFilter(null)}
+                  className="historico-pdf-btn"
+                  onClick={() => { setRelatorioTipo('completo'); setRelatorioPeriodo('24h'); setRelatorioModalOpen(true) }}
+                  disabled={history.length === 0}
+                  aria-label="Imprimir relatório"
                 >
-                  Todos
+                  <MdPictureAsPdf size={20} aria-hidden />
+                  Imprimir relatório
                 </button>
-                {PAYMENT_METHODS.map((method) => (
-                  <button
-                    key={method}
-                    type="button"
-                    className={`historico-filter-pill ${historicoPaymentFilter === method ? 'historico-filter-pill--active' : ''}`}
-                    onClick={() => setHistoricoPaymentFilter(method)}
-                  >
-                    {method}
-                  </button>
-                ))}
               </div>
               <div className="historico-list">
                 {history.length === 0 ? (
@@ -1903,6 +2057,117 @@ export default function App() {
         </>
       )}
 
+      {/* Relatório PDF — tipo de relatório e período */}
+      {relatorioModalOpen && (
+        <>
+          <div
+            className="add-overlay close-account-overlay close-account-overlay--open"
+            onClick={() => { setRelatorioModalOpen(false); setRelatorioTipo(null); setRelatorioPeriodo('24h') }}
+            aria-hidden
+          />
+          <div
+            className="add-panel-wrap close-account-panel-wrap close-account-panel-wrap--open relatorio-panel-wrap"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="relatorio-modal-title"
+          >
+            <div className="add-panel close-account-panel relatorio-panel" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className="add-panel-close"
+                onClick={() => { setRelatorioModalOpen(false); setRelatorioTipo(null); setRelatorioPeriodo('24h') }}
+                aria-label="Fechar"
+              >
+                <MdClose size={20} aria-hidden />
+              </button>
+              <h2 id="relatorio-modal-title" className="add-title add-title--client">
+                <MdPictureAsPdf size={20} aria-hidden />
+                Relatório de vendas (PDF)
+              </h2>
+              <p className="add-label close-account-label">Período:</p>
+              <div className="relatorio-options relatorio-periodo-options">
+                <button
+                  type="button"
+                  className={`add-btn close-account-method-btn ${relatorioPeriodo === '24h' ? 'close-account-method-btn--selected' : ''}`}
+                  onClick={() => setRelatorioPeriodo('24h')}
+                >
+                  Últimas 24 horas
+                </button>
+                <button
+                  type="button"
+                  className={`add-btn close-account-method-btn ${relatorioPeriodo === '48h' ? 'close-account-method-btn--selected' : ''}`}
+                  onClick={() => setRelatorioPeriodo('48h')}
+                >
+                  Últimas 48 horas
+                </button>
+                <button
+                  type="button"
+                  className={`add-btn close-account-method-btn ${relatorioPeriodo === 'semana' ? 'close-account-method-btn--selected' : ''}`}
+                  onClick={() => setRelatorioPeriodo('semana')}
+                >
+                  Última semana
+                </button>
+                <button
+                  type="button"
+                  className={`add-btn close-account-method-btn ${relatorioPeriodo === 'mes_atual' ? 'close-account-method-btn--selected' : ''}`}
+                  onClick={() => setRelatorioPeriodo('mes_atual')}
+                >
+                  Mês corrente
+                </button>
+                <button
+                  type="button"
+                  className={`add-btn close-account-method-btn ${relatorioPeriodo === 'mes_anterior' ? 'close-account-method-btn--selected' : ''}`}
+                  onClick={() => setRelatorioPeriodo('mes_anterior')}
+                >
+                  Último mês
+                </button>
+              </div>
+              <p className="add-desc close-account-subtitle">Escolha o tipo de relatório:</p>
+              <div className="relatorio-options">
+                <button
+                  type="button"
+                  className={`add-btn close-account-method-btn ${relatorioTipo === 'completo' ? 'close-account-method-btn--selected' : ''}`}
+                  onClick={() => setRelatorioTipo('completo')}
+                >
+                  Completo
+                </button>
+                <button
+                  type="button"
+                  className={`add-btn close-account-method-btn ${relatorioTipo === 'credito' ? 'close-account-method-btn--selected' : ''}`}
+                  onClick={() => setRelatorioTipo('credito')}
+                >
+                  Somente vendas no crédito
+                </button>
+                <button
+                  type="button"
+                  className={`add-btn close-account-method-btn ${relatorioTipo === 'anotado' ? 'close-account-method-btn--selected' : ''}`}
+                  onClick={() => setRelatorioTipo('anotado')}
+                >
+                  Somente vendas anotadas na conta
+                </button>
+              </div>
+              <div className="close-account-actions">
+                <button
+                  type="button"
+                  className="add-btn close-account-confirm-btn add-btn--primary"
+                  disabled={relatorioTipo == null}
+                  onClick={() => relatorioTipo != null && generateRelatorioPdf(relatorioTipo, relatorioPeriodo)}
+                >
+                  Imprimir
+                </button>
+                <button
+                  type="button"
+                  className="add-btn close-account-cancel-btn"
+                  onClick={() => { setRelatorioModalOpen(false); setRelatorioTipo(null); setRelatorioPeriodo('24h') }}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
       {toasts.length > 0 && (
         <div className="toast-stack" aria-live="polite" aria-atomic="false">
           {[...toasts].reverse().map((t) => (
@@ -2572,12 +2837,50 @@ const styles = `
     padding-bottom: 4rem;
   }
 
-  .historico-filters {
+  .historico-header-row {
     flex-shrink: 0;
     display: flex;
     flex-wrap: wrap;
-    gap: 0.5rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
     padding: 0.5rem 0 0.75rem;
+  }
+
+  .historico-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .historico-pdf-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #fff;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s, transform 0.1s ease;
+  }
+
+  .historico-pdf-btn:hover:not(:disabled) {
+    background: var(--accent-light);
+    border-color: var(--accent-light);
+  }
+
+  .historico-pdf-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .historico-pdf-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--accent-muted);
   }
 
   .historico-filter-pill {
@@ -3429,6 +3732,10 @@ const styles = `
     transition: transform 0.25s ease, opacity 0.25s ease;
   }
 
+  .relatorio-panel-wrap {
+    max-width: min(95vw, 520px);
+  }
+
   .close-account-panel-wrap--open {
     transform: translate(-50%, -50%) scale(1);
     opacity: 1;
@@ -3465,6 +3772,32 @@ const styles = `
   .close-account-panel > .close-account-methods,
   .close-account-panel > .close-account-actions {
     flex-shrink: 0;
+  }
+
+  .relatorio-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .relatorio-options .close-account-method-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .relatorio-periodo-options {
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+  }
+
+  .relatorio-periodo-options .close-account-method-btn {
+    width: auto;
+    flex: 1;
+    min-width: 0;
+    font-size: 0.75rem;
+    padding: 0.35rem 0.5rem;
   }
 
   .close-account-summary-scroll {
