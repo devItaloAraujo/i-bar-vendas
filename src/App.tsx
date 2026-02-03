@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { MdAdd, MdClose, MdReceipt, MdTableRestaurant, MdHistory, MdSettings, MdSearch, MdRestaurantMenu, MdEdit, MdPictureAsPdf } from 'react-icons/md'
+import { MdAdd, MdClose, MdReceipt, MdTableRestaurant, MdHistory, MdSettings, MdSearch, MdRestaurantMenu, MdEdit, MdPictureAsPdf, MdFlashOn } from 'react-icons/md'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import {
@@ -13,6 +13,7 @@ import {
   updateTableOrder,
   deleteTableOrder,
   closeTableAndAddToHistory,
+  addHistoryEntry,
   addCategory as dbAddCategory,
   addMenuItem as dbAddMenuItem,
   updateMenuItem as dbUpdateMenuItem,
@@ -75,7 +76,7 @@ function formatDate(iso: string) {
   })
 }
 
-type TabId = 'mesas' | 'historico' | 'produtos'
+type TabId = 'mesas' | 'venda-rapida' | 'historico' | 'produtos'
 type RelatorioPeriodo = '24h' | '48h' | 'semana' | 'mes_atual' | 'mes_anterior'
 
 export default function App() {
@@ -91,7 +92,7 @@ export default function App() {
   const [addOrderSearchQuery, setAddOrderSearchQuery] = useState('')
   const [customProductModalOpen, setCustomProductModalOpen] = useState(false)
   const [customProductName, setCustomProductName] = useState('')
-  const [customProductPrice, setCustomProductPrice] = useState('0,00')
+  const [customProductPrice, setCustomProductPrice] = useState('')
   const [pendingProductChoice, setPendingProductChoice] = useState<{
     productName: string
     categoryName: string
@@ -118,6 +119,9 @@ export default function App() {
   const [showWelcome, setShowWelcome] = useState(true)
   const [welcomeExiting, setWelcomeExiting] = useState(false)
   const [historicoPaymentFilter, setHistoricoPaymentFilter] = useState<string | null>(null)
+  const [quickSaleTotal, setQuickSaleTotal] = useState('')
+  const [quickSalePaymentMethod, setQuickSalePaymentMethod] = useState<string | null>(null)
+  const [quickSaleExiting, setQuickSaleExiting] = useState(false)
   const [relatorioModalOpen, setRelatorioModalOpen] = useState(false)
   const [relatorioTipo, setRelatorioTipo] = useState<'completo' | 'credito' | 'anotado' | null>('completo')
   const [relatorioPeriodo, setRelatorioPeriodo] = useState<RelatorioPeriodo>('24h')
@@ -127,9 +131,9 @@ export default function App() {
   const [newProductOpen, setNewProductOpen] = useState(false)
   const [newProductCategoryId, setNewProductCategoryId] = useState<string>('')
   const [newProductName, setNewProductName] = useState('')
-  const [newProductPrice, setNewProductPrice] = useState('0,00')
-  const [newProductPriceDrink, setNewProductPriceDrink] = useState('0,00')
-  const [newProductPriceTakeaway, setNewProductPriceTakeaway] = useState('0,00')
+  const [newProductPrice, setNewProductPrice] = useState('')
+  const [newProductPriceDrink, setNewProductPriceDrink] = useState('')
+  const [newProductPriceTakeaway, setNewProductPriceTakeaway] = useState('')
   const [newProductPriceMode, setNewProductPriceMode] = useState<'single' | 'beberLevar'>('single')
   const [editProductModal, setEditProductModal] = useState<{ item: MenuItemRow; categoryId: string } | null>(null)
   const [removeProductConfirm, setRemoveProductConfirm] = useState<{
@@ -138,9 +142,9 @@ export default function App() {
     categoryId: string
   } | null>(null)
   const [editProductName, setEditProductName] = useState('')
-  const [editProductPrice, setEditProductPrice] = useState('0,00')
-  const [editProductPriceDrink, setEditProductPriceDrink] = useState('0,00')
-  const [editProductPriceTakeaway, setEditProductPriceTakeaway] = useState('0,00')
+  const [editProductPrice, setEditProductPrice] = useState('')
+  const [editProductPriceDrink, setEditProductPriceDrink] = useState('')
+  const [editProductPriceTakeaway, setEditProductPriceTakeaway] = useState('')
   const [editProductPriceMode, setEditProductPriceMode] = useState<'single' | 'beberLevar'>('single')
   const newTableInputRef = useRef<HTMLInputElement>(null)
   const editingTableNameInputRef = useRef<HTMLInputElement>(null)
@@ -150,6 +154,7 @@ export default function App() {
   const toastHideTimersRef = useRef<Record<string, number>>({})
   const toastRemoveScheduledRef = useRef<Set<string>>(new Set())
   const pendingCloseAccountRef = useRef<{ tableId: string; paymentMethod: string; clientName: string } | null>(null)
+  const pendingQuickSaleRef = useRef<{ total: number; paymentMethod: string } | null>(null)
 
   const today = todayISO()
   const dailyTotal = history.reduce(
@@ -253,7 +258,7 @@ export default function App() {
     setAddOrderSearchQuery('')
     setSelectedCategoryIndex(null)
     setCustomProductName('')
-    setCustomProductPrice('0,00')
+    setCustomProductPrice('')
     setCustomProductModalOpen(true)
   }
 
@@ -263,7 +268,7 @@ export default function App() {
     setEditOrderDescription(baseDescription)
     setEditOrderQuantity(quantity)
     const unit = quantity > 0 ? order.amount / quantity : order.amount
-    setEditOrderUnitPrice(unit.toFixed(2).replace('.', ','))
+    setEditOrderUnitPrice(unit === 0 ? '' : unit.toFixed(2).replace('.', ','))
   }
 
   function removeOrder(tableId: string, orderId: string) {
@@ -365,7 +370,15 @@ export default function App() {
       setHistory((prev) => [newEntry, ...prev])
       setTables((prev) => prev.filter((t) => t.id !== tableId))
       setCloseAccountModal(null)
+      setSelectedPaymentMethod(null)
     })
+  }
+
+  function submitQuickSale() {
+    const total = Math.round(parsePrice(quickSaleTotal) * 100) / 100
+    if (total <= 0 || quickSalePaymentMethod == null) return
+    pendingQuickSaleRef.current = { total, paymentMethod: quickSalePaymentMethod }
+    setQuickSaleExiting(true)
   }
 
   const tableTotal = (t: Table) => t.orders.reduce((s, o) => s + o.amount, 0)
@@ -660,6 +673,36 @@ export default function App() {
   }, [closeAccountExiting])
 
   useEffect(() => {
+    if (!quickSaleExiting) return
+    const id = window.setTimeout(() => {
+      const p = pendingQuickSaleRef.current
+      if (p) {
+        const order: Order = {
+          id: crypto.randomUUID(),
+          description: 'Venda rápida',
+          amount: p.total,
+          date: todayISO(),
+          quantity: 1,
+        }
+        addHistoryEntry({
+          clientName: 'venda rapida',
+          paidAt: new Date().toISOString(),
+          paymentMethod: p.paymentMethod,
+          orders: [order],
+        }).then((newEntry) => {
+          setHistory((prev) => [newEntry, ...prev])
+          setToasts((prev) => [...prev, { id: crypto.randomUUID(), message: 'Venda rápida registrada!', type: 'success' }])
+        })
+        setQuickSaleTotal('')
+        setQuickSalePaymentMethod(null)
+        pendingQuickSaleRef.current = null
+      }
+      setQuickSaleExiting(false)
+    }, 320)
+    return () => clearTimeout(id)
+  }, [quickSaleExiting])
+
+  useEffect(() => {
     if (!totalJustUpdated) return
     const id = window.setTimeout(() => setTotalJustUpdated(false), 1500)
     return () => clearTimeout(id)
@@ -730,6 +773,18 @@ export default function App() {
               <button
                 type="button"
                 role="tab"
+                aria-selected={activeTab === 'venda-rapida'}
+                aria-controls="panel-venda-rapida"
+                id="tab-venda-rapida"
+                className={`tab ${activeTab === 'venda-rapida' ? 'tab--active' : ''}`}
+                onClick={() => setActiveTab('venda-rapida')}
+              >
+                <MdFlashOn size={20} aria-hidden />
+                Venda Rápida
+              </button>
+              <button
+                type="button"
+                role="tab"
                 aria-selected={activeTab === 'historico'}
                 aria-controls="panel-historico"
                 id="tab-historico"
@@ -764,9 +819,11 @@ export default function App() {
         <p className="hero-tagline">
           {activeTab === 'mesas'
             ? 'Controle de mesas e vendas do dia. Acompanhe pedidos e faturamento em um só lugar.'
-            : activeTab === 'historico'
-              ? 'Histórico de vendas por cliente. Pedidos já pagos e consolidados.'
-              : 'Edite o catálogo de produtos. Adicione categorias e itens ou altere preços.'}
+            : activeTab === 'venda-rapida'
+              ? 'Registre vendas avulsas. Informe o valor total e o método de pagamento.'
+              : activeTab === 'historico'
+                ? 'Histórico de vendas por cliente. Pedidos já pagos e consolidados.'
+                : 'Edite o catálogo de produtos. Adicione categorias e itens ou altere preços.'}
         </p>
 
         {activeTab === 'mesas' && (
@@ -896,17 +953,64 @@ export default function App() {
               onClick={() => setNewTableOpen(true)}
               aria-label="Novo cliente — informar nome do cliente"
             >
-              <span className="table-card-placeholder-label">Novo cliente</span>
-              </button>
+<span className="table-card-placeholder-label">Novo cliente</span>
+            </button>
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'venda-rapida' && (
+          <section className="venda-rapida-workspace" id="panel-venda-rapida" role="tabpanel" aria-labelledby="tab-venda-rapida">
+            <div className={`venda-rapida-card ${quickSaleExiting ? 'venda-rapida-card--exiting' : ''}`}>
+              <h2 className="venda-rapida-title">
+                <MdFlashOn size={24} aria-hidden />
+                Registrar venda rápida
+              </h2>
+              <p className="venda-rapida-desc">Informe o total da venda em reais e o método de pagamento. A venda será adicionada ao histórico como &quot;venda rapida&quot;.</p>
+              <div className="venda-rapida-form">
+                <label className="venda-rapida-label" htmlFor="quick-sale-total">
+                  Total (R$)
+                </label>
+                <input
+                  id="quick-sale-total"
+                  type="text"
+                  inputMode="decimal"
+                  className="venda-rapida-input"
+                  value={quickSaleTotal}
+                  onChange={(e) => setQuickSaleTotal(e.target.value)}
+                  placeholder="0,00"
+                  aria-label="Valor total da venda em reais"
+                />
+                <p className="add-label venda-rapida-methods-label">Método de pagamento</p>
+                <div className="close-account-methods venda-rapida-methods">
+                  {PAYMENT_METHODS.map((method) => (
+                    <button
+                      key={method}
+                      type="button"
+                      className={`add-btn close-account-method-btn ${quickSalePaymentMethod === method ? 'close-account-method-btn--selected' : ''}`}
+                      onClick={() => setQuickSalePaymentMethod(method)}
+                    >
+                      {method}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="add-btn add-btn--primary venda-rapida-submit"
+                  disabled={Math.round(parsePrice(quickSaleTotal) * 100) / 100 <= 0 || quickSalePaymentMethod == null}
+                  onClick={submitQuickSale}
+                >
+                  Registrar venda
+                </button>
+              </div>
             </div>
           </section>
         )}
 
         {activeTab === 'historico' && (() => {
-          const reversedHistory = [...history].reverse()
           const filteredHistory = historicoPaymentFilter === null
-            ? reversedHistory
-            : reversedHistory.filter((e) => (e.paymentMethod ?? '') === historicoPaymentFilter)
+            ? history
+            : history.filter((e) => (e.paymentMethod ?? '') === historicoPaymentFilter)
           const filteredTotalByMethod = filteredHistory.reduce((s, e) => s + historyEntryTotal(e), 0)
           const showTotalByMethod = historicoPaymentFilter !== null && filteredHistory.length > 0
           return (
@@ -1014,9 +1118,9 @@ export default function App() {
                   if (categoriesWithItems.length === 0) return
                   setNewProductCategoryId(categoriesWithItems[0].id)
                   setNewProductName('')
-                  setNewProductPrice('0,00')
-                  setNewProductPriceDrink('0,00')
-                  setNewProductPriceTakeaway('0,00')
+                  setNewProductPrice('')
+                  setNewProductPriceDrink('')
+                  setNewProductPriceTakeaway('')
                   setNewProductPriceMode('single')
                   setNewProductOpen(true)
                 }}
@@ -1056,9 +1160,9 @@ export default function App() {
                         onClick={() => {
                           setNewProductCategoryId(cat.id)
                           setNewProductName('')
-                          setNewProductPrice('0,00')
-                          setNewProductPriceDrink('0,00')
-                          setNewProductPriceTakeaway('0,00')
+                          setNewProductPrice('')
+                          setNewProductPriceDrink('')
+                          setNewProductPriceTakeaway('')
                           setNewProductPriceMode('single')
                           setNewProductOpen(true)
                         }}
@@ -1425,7 +1529,7 @@ export default function App() {
                       await refreshProductsAndMenu()
                       setCustomProductModalOpen(false)
                       setCustomProductName('')
-                      setCustomProductPrice('0,00')
+                      setCustomProductPrice('')
                     }
                   }}
                 >
@@ -1445,7 +1549,7 @@ export default function App() {
                       className="price-input-btn price-input-btn--minus"
                       onClick={() => {
                         const v = Math.max(0, parsePrice(customProductPrice) - 0.5)
-                        setCustomProductPrice(formatPrice(v))
+                        setCustomProductPrice(v === 0 ? '' : formatPrice(v))
                       }}
                       aria-label="Diminuir R$ 0,50"
                     >
@@ -1650,9 +1754,9 @@ export default function App() {
                     refreshProductsAndMenu()
                     setNewProductOpen(false)
                     setNewProductName('')
-                    setNewProductPrice('0,00')
-                    setNewProductPriceDrink('0,00')
-                    setNewProductPriceTakeaway('0,00')
+                    setNewProductPrice('')
+                    setNewProductPriceDrink('')
+                    setNewProductPriceTakeaway('')
                     setToasts((prev) => [...prev, { id: crypto.randomUUID(), message: 'Produto adicionado', type: 'success' }])
                   })
                 }}
@@ -1699,6 +1803,8 @@ export default function App() {
                     <div className="price-input-wrap">
                       <input
                         type="text"
+                        inputMode="decimal"
+                        placeholder="0,00"
                         className="price-input add-input"
                         value={newProductPrice}
                         onChange={(e) => setNewProductPrice(e.target.value.replace(/[^\d,.]/g, ''))}
@@ -1712,6 +1818,8 @@ export default function App() {
                     <div className="price-input-wrap">
                       <input
                         type="text"
+                        inputMode="decimal"
+                        placeholder="0,00"
                         className="price-input add-input"
                         value={newProductPriceDrink}
                         onChange={(e) => setNewProductPriceDrink(e.target.value.replace(/[^\d,.]/g, ''))}
@@ -1722,6 +1830,8 @@ export default function App() {
                     <div className="price-input-wrap">
                       <input
                         type="text"
+                        inputMode="decimal"
+                        placeholder="0,00"
                         className="price-input add-input"
                         value={newProductPriceTakeaway}
                         onChange={(e) => setNewProductPriceTakeaway(e.target.value.replace(/[^\d,.]/g, ''))}
@@ -1828,6 +1938,8 @@ export default function App() {
                     <div className="price-input-wrap">
                       <input
                         type="text"
+                        inputMode="decimal"
+                        placeholder="0,00"
                         className="price-input add-input"
                         value={editProductPrice}
                         onChange={(e) => setEditProductPrice(e.target.value.replace(/[^\d,.]/g, ''))}
@@ -1841,6 +1953,8 @@ export default function App() {
                     <div className="price-input-wrap">
                       <input
                         type="text"
+                        inputMode="decimal"
+                        placeholder="0,00"
                         className="price-input add-input"
                         value={editProductPriceDrink}
                         onChange={(e) => setEditProductPriceDrink(e.target.value.replace(/[^\d,.]/g, ''))}
@@ -1851,6 +1965,8 @@ export default function App() {
                     <div className="price-input-wrap">
                       <input
                         type="text"
+                        inputMode="decimal"
+                        placeholder="0,00"
                         className="price-input add-input"
                         value={editProductPriceTakeaway}
                         onChange={(e) => setEditProductPriceTakeaway(e.target.value.replace(/[^\d,.]/g, ''))}
@@ -3028,6 +3144,123 @@ const styles = `
   .table-card-close-btn:hover {
     background: var(--accent);
     color: #fff;
+  }
+
+  .venda-rapida-workspace {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 1rem 0;
+  }
+
+  .venda-rapida-card {
+    width: 100%;
+    max-width: 420px;
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    padding: 1.5rem;
+    backdrop-filter: blur(8px);
+    transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+  }
+
+  .venda-rapida-card--exiting {
+    transform: translateY(-120%) scale(0.2);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .venda-rapida-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 0.5rem;
+  }
+
+  .venda-rapida-title svg {
+    color: var(--accent);
+  }
+
+  .venda-rapida-desc {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin: 0 0 1.25rem;
+    line-height: 1.4;
+  }
+
+  .venda-rapida-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .venda-rapida-label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .venda-rapida-input {
+    padding: 0.6rem 0.75rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 1rem;
+    font-family: inherit;
+  }
+
+  .venda-rapida-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-muted);
+  }
+
+  .venda-rapida-methods-label {
+    margin: 0.25rem 0 0;
+  }
+
+  .venda-rapida-methods {
+    margin: 0;
+  }
+
+  .venda-rapida-card .close-account-method-btn {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+  }
+
+  .venda-rapida-card .close-account-method-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-muted);
+  }
+
+  .venda-rapida-card .close-account-method-btn--selected {
+    background: #1b5e20;
+    border-color: #1b5e20;
+    color: #fff;
+  }
+
+  .venda-rapida-card .close-account-method-btn--selected:hover {
+    background: #2e7d32;
+    border-color: #2e7d32;
+    color: #fff;
+  }
+
+  .venda-rapida-submit {
+    margin-top: 0.5rem;
   }
 
   .historico {
