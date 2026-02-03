@@ -13,6 +13,9 @@ import {
   addCategory as dbAddCategory,
   addMenuItem as dbAddMenuItem,
   updateMenuItem as dbUpdateMenuItem,
+  deleteMenuItem as dbDeleteMenuItem,
+  getCategoryItemCount,
+  deleteCategory as dbDeleteCategory,
   type Table,
   type Order,
   type HistoryEntry,
@@ -121,6 +124,11 @@ export default function App() {
   const [newProductPriceTakeaway, setNewProductPriceTakeaway] = useState('0,00')
   const [newProductPriceMode, setNewProductPriceMode] = useState<'single' | 'beberLevar'>('single')
   const [editProductModal, setEditProductModal] = useState<{ item: MenuItemRow; categoryId: string } | null>(null)
+  const [removeProductConfirm, setRemoveProductConfirm] = useState<{
+    itemName: string
+    itemId: string
+    categoryId: string
+  } | null>(null)
   const [editProductName, setEditProductName] = useState('')
   const [editProductPrice, setEditProductPrice] = useState('0,00')
   const [editProductPriceDrink, setEditProductPriceDrink] = useState('0,00')
@@ -331,6 +339,9 @@ export default function App() {
       } else if (removeConfirm) {
         e.preventDefault()
         setRemoveConfirm(null)
+      } else if (removeProductConfirm) {
+        e.preventDefault()
+        setRemoveProductConfirm(null)
       } else if (editOrderModal) {
         e.preventDefault()
         closeEditOrderModal()
@@ -353,7 +364,7 @@ export default function App() {
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, closeAccountModal, editProductModal, newCategoryOpen, newProductOpen])
+  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, editProductModal, newCategoryOpen, newProductOpen])
 
   useEffect(() => {
     const anyModalOpen =
@@ -361,6 +372,7 @@ export default function App() {
       newTableOpen ||
       !!editOrderModal ||
       !!removeConfirm ||
+      !!removeProductConfirm ||
       !!closeAccountModal ||
       newCategoryOpen ||
       newProductOpen ||
@@ -371,7 +383,7 @@ export default function App() {
     return () => {
       document.body.style.overflow = prev
     }
-  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, closeAccountModal, newCategoryOpen, newProductOpen, editProductModal])
+  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, newCategoryOpen, newProductOpen, editProductModal])
 
   useEffect(() => {
     if (!newTableOpen) return
@@ -507,7 +519,7 @@ export default function App() {
               </button>
             </div>
             <div className={`daily-total ${totalJustUpdated ? 'daily-total--glow' : ''}`} title="Vendas de hoje">
-              <span className="daily-total-label">Total</span>
+              <span className="daily-total-label">Total PAGO HOJE</span>
               <span className="daily-total-value">{formatMoney(dailyTotal)}</span>
             </div>
           </div>
@@ -647,7 +659,10 @@ export default function App() {
                   filteredHistory.map((entry) => (
                     <article key={entry.id} className="historico-card">
                       <div className="historico-card-header">
-                        <h2 className="historico-card-title">{entry.clientName}</h2>
+                        <h2 className="historico-card-title">
+                          <MdReceipt size={20} className="historico-card-icon" aria-hidden />
+                          {entry.clientName}
+                        </h2>
                         <span className="historico-card-total">{formatMoney(historyEntryTotal(entry))}</span>
                       </div>
                       <p className="historico-card-date">
@@ -714,10 +729,25 @@ export default function App() {
               {categoriesWithItems.length === 0 ? (
                 <p className="produtos-empty">Nenhuma categoria ainda. Crie uma categoria e depois adicione produtos.</p>
               ) : (
-                categoriesWithItems.map((cat) => (
-                  <article key={cat.id} className="produtos-category-card">
+                [...categoriesWithItems]
+                  .sort((a, b) => {
+                    if (a.name === 'Outros') return -1
+                    if (b.name === 'Outros') return 1
+                    return a.sortOrder - b.sortOrder
+                  })
+                  .map((cat) => (
+                  <article
+                    key={cat.id}
+                    className="produtos-category-card"
+                    style={{
+                      gridRow: 'span ' + (4 + (cat.items.length === 0 ? 1 : Math.ceil(cat.items.length * 1.5))),
+                    }}
+                  >
                     <div className="produtos-category-header">
-                      <h2 className="produtos-category-title">{cat.name}</h2>
+                      <h2 className="produtos-category-title">
+                        <MdRestaurantMenu size={20} className="produtos-category-icon" aria-hidden />
+                        {cat.name}
+                      </h2>
                       <button
                         type="button"
                         className="produtos-add-item-btn"
@@ -1075,13 +1105,22 @@ export default function App() {
                 </h3>
                 <form
                   className="add-form"
-                  onSubmit={(e) => {
+                  onSubmit={async (e) => {
                     e.preventDefault()
                     const name = customProductName.trim()
                     const amount = parsePrice(customProductPrice)
                     if (name && amount > 0) {
                       const displayName = name.charAt(0).toUpperCase() + name.slice(1)
                       addOrderFromProduct(displayName, amount)
+                      // Save to Produtos DB in default "Outros" category with this price
+                      const cats = await getCategoriesWithItems()
+                      let outros = cats.find((c) => c.name === 'Outros')
+                      if (!outros) {
+                        const newCat = await dbAddCategory('Outros')
+                        outros = { id: newCat.id, name: newCat.name, sortOrder: newCat.sortOrder, items: [] }
+                      }
+                      await dbAddMenuItem(outros.id, { name: displayName, price: amount })
+                      await refreshProductsAndMenu()
                       setCustomProductModalOpen(false)
                       setCustomProductName('')
                       setCustomProductPrice('0,00')
@@ -1116,7 +1155,7 @@ export default function App() {
                       placeholder="0,00"
                       className="add-input price-input"
                       value={customProductPrice}
-                      onChange={(e) => setCustomProductPrice(e.target.value)}
+                      onChange={(e) => setCustomProductPrice(e.target.value.replace(/[^\d,.]/g, ''))}
                       aria-label="Valor em reais"
                     />
                     <button
@@ -1360,7 +1399,7 @@ export default function App() {
                         type="text"
                         className="price-input add-input"
                         value={newProductPrice}
-                        onChange={(e) => setNewProductPrice(e.target.value.replace(/[^\d,]/g, '').replace(/(\d),(\d)/, '$1.$2'))}
+                        onChange={(e) => setNewProductPrice(e.target.value.replace(/[^\d,.]/g, ''))}
                         aria-label="Preço"
                       />
                     </div>
@@ -1373,7 +1412,7 @@ export default function App() {
                         type="text"
                         className="price-input add-input"
                         value={newProductPriceDrink}
-                        onChange={(e) => setNewProductPriceDrink(e.target.value.replace(/[^\d,]/g, '').replace(/(\d),(\d)/, '$1.$2'))}
+                        onChange={(e) => setNewProductPriceDrink(e.target.value.replace(/[^\d,.]/g, ''))}
                         aria-label="Preço beber"
                       />
                     </div>
@@ -1383,7 +1422,7 @@ export default function App() {
                         type="text"
                         className="price-input add-input"
                         value={newProductPriceTakeaway}
-                        onChange={(e) => setNewProductPriceTakeaway(e.target.value.replace(/[^\d,]/g, '').replace(/(\d),(\d)/, '$1.$2'))}
+                        onChange={(e) => setNewProductPriceTakeaway(e.target.value.replace(/[^\d,.]/g, ''))}
                         aria-label="Preço levar"
                       />
                     </div>
@@ -1489,7 +1528,7 @@ export default function App() {
                         type="text"
                         className="price-input add-input"
                         value={editProductPrice}
-                        onChange={(e) => setEditProductPrice(e.target.value.replace(/[^\d,]/g, '').replace(/(\d),(\d)/, '$1.$2'))}
+                        onChange={(e) => setEditProductPrice(e.target.value.replace(/[^\d,.]/g, ''))}
                         aria-label="Preço"
                       />
                     </div>
@@ -1502,7 +1541,7 @@ export default function App() {
                         type="text"
                         className="price-input add-input"
                         value={editProductPriceDrink}
-                        onChange={(e) => setEditProductPriceDrink(e.target.value.replace(/[^\d,]/g, '').replace(/(\d),(\d)/, '$1.$2'))}
+                        onChange={(e) => setEditProductPriceDrink(e.target.value.replace(/[^\d,.]/g, ''))}
                         aria-label="Preço beber"
                       />
                     </div>
@@ -1512,7 +1551,7 @@ export default function App() {
                         type="text"
                         className="price-input add-input"
                         value={editProductPriceTakeaway}
-                        onChange={(e) => setEditProductPriceTakeaway(e.target.value.replace(/[^\d,]/g, '').replace(/(\d),(\d)/, '$1.$2'))}
+                        onChange={(e) => setEditProductPriceTakeaway(e.target.value.replace(/[^\d,.]/g, ''))}
                         aria-label="Preço levar"
                       />
                     </div>
@@ -1530,7 +1569,74 @@ export default function App() {
                 >
                   Salvar alterações
                 </button>
+                <button
+                  type="button"
+                  className="add-btn confirm-btn-remove produtos-delete-btn"
+                  onClick={() =>
+                    editProductModal &&
+                    setRemoveProductConfirm({
+                      itemName: editProductName.trim() || editProductModal.item.name,
+                      itemId: editProductModal.item.id,
+                      categoryId: editProductModal.categoryId,
+                    })
+                  }
+                  aria-label="Deletar produto"
+                >
+                  Deletar produto
+                </button>
               </form>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Remove product confirmation modal */}
+      {removeProductConfirm && (
+        <>
+          <div
+            className="confirm-overlay"
+            onClick={() => setRemoveProductConfirm(null)}
+            aria-hidden
+          />
+          <div
+            className="confirm-panel-wrap"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-product-title"
+            aria-describedby="confirm-product-desc"
+          >
+            <div className="confirm-panel" onClick={(e) => e.stopPropagation()}>
+              <h2 id="confirm-product-title" className="confirm-title">
+                Deletar produto
+              </h2>
+              <p id="confirm-product-desc" className="confirm-desc">
+                Deletar <strong>"{removeProductConfirm.itemName}"</strong> do cardápio? A categoria será removida se não restar nenhum outro produto.
+              </p>
+              <div className="confirm-actions">
+                <button
+                  type="button"
+                  className="add-btn confirm-btn-cancel"
+                  onClick={() => setRemoveProductConfirm(null)}
+                >
+                  Não
+                </button>
+                <button
+                  type="button"
+                  className="add-btn confirm-btn-remove"
+                  onClick={async () => {
+                    const { itemId, categoryId, itemName } = removeProductConfirm
+                    await dbDeleteMenuItem(itemId)
+                    const remaining = await getCategoryItemCount(categoryId)
+                    if (remaining === 0) await dbDeleteCategory(categoryId)
+                    await refreshProductsAndMenu()
+                    setRemoveProductConfirm(null)
+                    setEditProductModal(null)
+                    setToasts((prev) => [...prev, { id: crypto.randomUUID(), message: `${itemName} removido do cardápio`, type: 'remove' }])
+                  }}
+                >
+                  Sim, deletar
+                </button>
+              </div>
             </div>
           </div>
         </>
@@ -1608,7 +1714,7 @@ export default function App() {
                     placeholder="0,00"
                     className="add-input price-input"
                     value={editOrderAmount}
-                    onChange={(e) => setEditOrderAmount(e.target.value)}
+                    onChange={(e) => setEditOrderAmount(e.target.value.replace(/[^\d,.]/g, ''))}
                   />
                   <button
                     type="button"
@@ -2545,6 +2651,14 @@ const styles = `
     margin: 0;
     text-transform: uppercase;
     letter-spacing: 0.02em;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .historico-card-icon {
+    flex-shrink: 0;
+    color: #4a4d52;
   }
 
   .historico-card-total {
@@ -3619,8 +3733,11 @@ const styles = `
     overflow-y: auto;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-auto-rows: 20px;
+    grid-auto-flow: dense;
     gap: 1rem;
     align-content: start;
+    align-items: start;
   }
 
   .produtos-empty {
@@ -3650,7 +3767,7 @@ const styles = `
     gap: 0.75rem;
     padding: 0.75rem 1rem;
     border-bottom: 1px solid var(--border);
-    background: rgba(168, 173, 180, 0.4);
+    background: rgba(96, 165, 250, 0.35);
   }
 
   .produtos-category-title {
@@ -3661,6 +3778,14 @@ const styles = `
     margin: 0;
     text-transform: uppercase;
     letter-spacing: 0.02em;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .produtos-category-icon {
+    flex-shrink: 0;
+    color: var(--text-muted);
   }
 
   .produtos-add-item-btn {
@@ -3784,6 +3909,10 @@ const styles = `
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+  }
+
+  .produtos-delete-btn {
+    margin-top: 0.5rem;
   }
 
   .add-panel-close {

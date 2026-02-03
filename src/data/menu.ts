@@ -28,6 +28,13 @@ export const menu = {
       ]
     },
     {
+      category: "Cerveja Lata",
+      items: [
+        { name: "Budweiser Zero Lata", price: 6.5 },
+        { name: "Ecobier Lata", price: 5.0 }
+      ]
+    },
+    {
       category: "Long Neck",
       items: [
         { name: "Corona", price: 11.0 },
@@ -123,9 +130,7 @@ export const menu = {
     {
       category: "Bebidas Alcoólicas",
       items: [
-        { name: "Budweiser Zero Lata", price: 6.5 },
         { name: "Xá de Cana", price: 15.0 },
-        { name: "Ecobier Lata", price: 5.0 },
         { name: "Ice Leev Maracuja", price: 8.0 },
         { name: "Ice Kislla", price: 5.0 },
         { name: "Canelinha", price: 8.0 },

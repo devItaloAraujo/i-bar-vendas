@@ -1,28 +1,61 @@
 # iBar-vendas
 
-**Controle de vendas e mesas para bar e restaurante.**
+Sistema de controle de vendas e mesas para bar e restaurante.
 
-App em React + TypeScript (Vite): workspace para acompanhar mesas (pedidos por mesa), registrar vendas e ver o faturamento do dia.
+## Tecnologias
 
-## Como rodar
+- React + TypeScript + Vite
+- Dexie (IndexedDB) para persistência offline
+- PWA (Progressive Web App) com vite-plugin-pwa
+
+## Desenvolvimento
 
 ```bash
-npm install
-npm run dev
+npm install    # Instalar dependências
+npm run dev    # Servidor de desenvolvimento (http://localhost:5173)
+npm run build  # Build de produção (pasta dist/)
 ```
 
-Abra o endereço indicado no terminal (geralmente `http://localhost:5173`).
+## Estrutura de Branches
 
-## Funcionalidades
+| Branch | Descrição |
+|--------|-----------|
+| `main` | Código fonte - faça suas alterações aqui |
+| `gh-pages` | Build de produção - **NÃO EDITE DIRETAMENTE** |
 
-- **Mesas**: cards por mesa (ou balcão) com lista de pedidos e total
-- **Nova venda**: registrar pedido (descrição + valor) em uma mesa
-- **Nova mesa**: adicionar novas mesas ao painel
-- **Vendas hoje**: total do dia exibido no header
-- Interface com fundo suave e animação sutil para uso prolongado
+## Deploy para GitHub Pages
 
-## Stack
+Após fazer alterações no `main`, execute o deploy:
 
-- React 18 + TypeScript
-- Vite
-- Tipografia: DM Sans
+```bash
+npm run deploy
+```
+
+Ou manualmente:
+```bash
+npm run build
+cd dist
+git init
+git add -A
+git commit -m "Deploy"
+git branch -M gh-pages
+git remote add origin https://github.com/devItaloAraujo/i-bar-vendas.git
+git push -f origin gh-pages
+cd ..
+```
+
+**URL do app:** https://devitaloaraujo.github.io/i-bar-vendas/
+
+## Fluxo de Trabalho
+
+1. Faça alterações no código (branch `main`)
+2. Teste localmente com `npm run dev`
+3. Commit no `main`: `git add . && git commit -m "mensagem" && git push`
+4. Deploy: `npm run deploy`
+
+## Instalação como PWA (para o cliente)
+
+1. Acesse a URL do app no Chrome
+2. Clique no ícone ⊕ na barra de endereço
+3. Clique "Instalar"
+4. O app funciona 100% offline após a primeira instalação

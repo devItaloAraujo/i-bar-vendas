@@ -105,7 +105,39 @@ const SEEDED_KEY = 'iBarVendas_seeded_v3'
 
 let seedingPromise: Promise<void> | null = null
 
-async function seedIfNeeded() {
+/** Remove duplicate categories (same name): keep one, merge items into it, delete duplicates. Then remove duplicate menu items (same categoryId + name). */
+async function deduplicateCategories(): Promise<void> {
+  const categories = await db.categories.orderBy('sortOrder').toArray()
+  const byName = new Map<string, CategoryRow[]>()
+  for (const c of categories) {
+    const list = byName.get(c.name) ?? []
+    list.push(c)
+    byName.set(c.name, list)
+  }
+  for (const [, list] of byName) {
+    if (list.length <= 1) continue
+    list.sort((a, b) => a.sortOrder !== b.sortOrder ? a.sortOrder - b.sortOrder : a.id.localeCompare(b.id))
+    const [keep, ...dupes] = list
+    for (const dup of dupes) {
+      const items = await db.menuItems.where('categoryId').equals(dup.id).toArray()
+      for (const item of items) {
+        await db.menuItems.update(item.id, { categoryId: keep.id } as Partial<MenuItemRow>)
+      }
+      await db.categories.delete(dup.id)
+    }
+  }
+  // Dedupe menu items by (categoryId, name): keep first, delete rest
+  const allItems = await db.menuItems.toArray()
+  const seen = new Map<string, string>()
+  for (const item of allItems) {
+    const key = `${item.categoryId}\0${item.name}`
+    const existingId = seen.get(key)
+    if (existingId != null) await db.menuItems.delete(item.id)
+    else seen.set(key, item.id)
+  }
+}
+
+async function seedIfNeeded(): Promise<void> {
   // Prevent concurrent seeding
   if (seedingPromise) return seedingPromise
   
@@ -114,7 +146,10 @@ async function seedIfNeeded() {
   if (seeded === '1') {
     const categoryCount = await db.categories.count()
     const itemCount = await db.menuItems.count()
-    if (categoryCount > 0 && itemCount > 0) return
+    if (categoryCount > 0 && itemCount > 0) {
+      await deduplicateCategories()
+      return
+    }
   }
   
   // Need to seed - use a promise to prevent race conditions
@@ -143,6 +178,7 @@ async function seedIfNeeded() {
         await db.menuItems.add(row)
       }
     }
+    await deduplicateCategories()
     localStorage.setItem(SEEDED_KEY, '1')
   })()
   
@@ -190,11 +226,14 @@ export async function getCategoriesWithItems(): Promise<CategoryWithItems[]> {
 }
 
 export async function addCategory(name: string): Promise<CategoryRow> {
+  const trimmed = name.trim()
+  const existing = await db.categories.filter((c) => c.name === trimmed).first()
+  if (existing != null) return existing
   const categories = await db.categories.orderBy('sortOrder').toArray()
   const sortOrder = categories.length
   const id = crypto.randomUUID()
-  await db.categories.add({ id, name: name.trim(), sortOrder })
-  return { id, name: name.trim(), sortOrder }
+  await db.categories.add({ id, name: trimmed, sortOrder })
+  return { id, name: trimmed, sortOrder }
 }
 
 export async function updateCategory(id: string, name: string): Promise<void> {
@@ -235,6 +274,14 @@ export async function updateMenuItem(
 
 export async function deleteMenuItem(id: string): Promise<void> {
   await db.menuItems.delete(id)
+}
+
+export async function getCategoryItemCount(categoryId: string): Promise<number> {
+  return db.menuItems.where('categoryId').equals(categoryId).count()
+}
+
+export async function deleteCategory(id: string): Promise<void> {
+  await db.categories.delete(id)
 }
 
 // --- Tables + orders ---
