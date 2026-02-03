@@ -8,6 +8,7 @@ import {
   getHistory,
   getCategoriesWithItems,
   addTable as dbAddTable,
+  updateTable as dbUpdateTable,
   addTableOrder,
   updateTableOrder,
   deleteTableOrder,
@@ -141,7 +142,10 @@ export default function App() {
   const [editProductPriceTakeaway, setEditProductPriceTakeaway] = useState('0,00')
   const [editProductPriceMode, setEditProductPriceMode] = useState<'single' | 'beberLevar'>('single')
   const newTableInputRef = useRef<HTMLInputElement>(null)
+  const editingTableNameInputRef = useRef<HTMLInputElement>(null)
   const novoClientePlaceholderRef = useRef<HTMLButtonElement>(null)
+  const [editingTableId, setEditingTableId] = useState<string | null>(null)
+  const [editingTableName, setEditingTableName] = useState('')
   const toastHideTimersRef = useRef<Record<string, number>>({})
   const toastRemoveScheduledRef = useRef<Set<string>>(new Set())
   const pendingCloseAccountRef = useRef<{ tableId: string; paymentMethod: string; clientName: string } | null>(null)
@@ -535,6 +539,30 @@ export default function App() {
     return () => clearTimeout(id)
   }, [newTableOpen])
 
+  useEffect(() => {
+    if (!editingTableId) return
+    setEditingTableName(tables.find((t) => t.id === editingTableId)?.name ?? '')
+    const id = setTimeout(() => {
+      editingTableNameInputRef.current?.focus()
+      editingTableNameInputRef.current?.select()
+    }, 0)
+    return () => clearTimeout(id)
+  }, [editingTableId, tables])
+
+  function saveEditingTableName(tableId: string, currentName: string) {
+    const nextName = editingTableName.trim() || currentName
+    if (nextName === currentName) {
+      setEditingTableId(null)
+      return
+    }
+    dbUpdateTable(tableId, { name: nextName }).then(() => {
+      setTables((prev) =>
+        prev.map((t) => (t.id === tableId ? { ...t, name: nextName } : t))
+      )
+      setEditingTableId(null)
+    })
+  }
+
   function handleWelcomeTransitionEnd(e: React.TransitionEvent) {
     if (e.propertyName !== 'opacity') return
     if (welcomeExiting) {
@@ -681,32 +709,57 @@ export default function App() {
           <section className="workspace" id="panel-mesas" role="tabpanel" aria-labelledby="tab-mesas">
             <div className="workspace-grid">
               {tables.map((table) => (
-                <article
-                  key={table.id}
-                  role="button"
-                  tabIndex={0}
-                  className="table-card table-card--clickable"
-                  onClick={() => {
-                    setSaleTableId(table.id)
-                    openAddModal()
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      setSaleTableId(table.id)
-                      openAddModal()
-                    }
-                  }}
-                  aria-label={`${table.name} — anotar pedido`}
-                >
-                  <div className="table-card-header">
+                <article key={table.id} className="table-card">
+                  <div
+                    className="table-card-header"
+                    onClick={(e) => e.stopPropagation()}
+                    onDoubleClick={() => setEditingTableId(table.id)}
+                  >
                     <div className="table-card-header-left">
                       <MdTableRestaurant size={20} className="table-card-header-icon" aria-hidden />
-                      <h2 className="table-card-title table-card-title--client">{table.name}</h2>
+                      {editingTableId === table.id ? (
+                        <input
+                          ref={editingTableId === table.id ? editingTableNameInputRef : null}
+                          type="text"
+                          className="table-card-title table-card-title--client table-card-title-input"
+                          value={editingTableName}
+                          onChange={(e) => setEditingTableName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              saveEditingTableName(table.id, table.name)
+                            }
+                            if (e.key === 'Escape') {
+                              setEditingTableName(table.name)
+                              setEditingTableId(null)
+                            }
+                          }}
+                          onBlur={() => saveEditingTableName(table.id, table.name)}
+                          aria-label="Nome do cliente"
+                        />
+                      ) : (
+                        <h2 className="table-card-title table-card-title--client">{table.name}</h2>
+                      )}
                     </div>
                     <span className="table-card-total">{formatMoney(tableTotal(table))}</span>
                   </div>
-                  <div className="table-card-body">
+                  <div
+                    className="table-card-body"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      setSaleTableId(table.id)
+                      openAddModal()
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        setSaleTableId(table.id)
+                        openAddModal()
+                      }
+                    }}
+                    aria-label={`${table.name} — anotar pedido`}
+                  >
                     {table.orders.length === 0 ? (
                       <p className="table-card-empty">Clique para anotar o primeiro pedido</p>
                     ) : (
@@ -2631,17 +2684,6 @@ const styles = `
     backdrop-filter: blur(8px);
   }
 
-  .table-card--clickable {
-    cursor: pointer;
-  }
-
-  .table-card--clickable:focus-visible {
-    outline: none;
-    box-shadow:
-      0 0 0 4px var(--accent),
-      0 0 0 6px var(--accent-muted);
-  }
-
   .table-card:hover {
     box-shadow: var(--shadow-hover);
   }
@@ -2678,6 +2720,23 @@ const styles = `
     font-family: Georgia, 'Times New Roman', serif;
     text-transform: uppercase;
     letter-spacing: 0.02em;
+  }
+
+  .table-card-title-input {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+
+  .table-card-title-input:focus {
+    outline: none;
   }
 
   .table-card-placeholder {
@@ -2724,6 +2783,12 @@ const styles = `
   .table-card-body {
     padding: 1rem 1.25rem;
     min-height: 100px;
+    cursor: pointer;
+  }
+
+  .table-card-body:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--accent);
   }
 
   .table-card-empty {
@@ -2733,7 +2798,7 @@ const styles = `
     font-style: italic;
   }
 
-  .table-card--clickable:hover .table-card-empty {
+  .table-card-body:hover .table-card-empty {
     color: var(--accent);
   }
 

@@ -310,6 +310,13 @@ export async function addTable(name: string): Promise<Table> {
   return { id, name, orders: [] }
 }
 
+export async function updateTable(tableId: string, updates: { name?: string }): Promise<void> {
+  const row = await db.activeTables.get(tableId)
+  if (!row) return
+  if (updates.name != null) row.name = updates.name
+  await db.activeTables.put(row)
+}
+
 export async function deleteTable(tableId: string): Promise<void> {
   await db.tableOrders.where('tableId').equals(tableId).delete()
   await db.activeTables.delete(tableId)
