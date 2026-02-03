@@ -28,6 +28,7 @@ export interface TableOrderRow {
   description: string
   amount: number
   date: string
+  quantity?: number
 }
 
 export interface HistoryEntryRow {
@@ -43,6 +44,7 @@ export interface HistoryOrderRow {
   description: string
   amount: number
   date: string
+  quantity?: number
 }
 
 // --- App-facing types (same as App.tsx) ---
@@ -51,6 +53,7 @@ export interface Order {
   description: string
   amount: number
   date: string
+  quantity?: number
 }
 
 export interface Table {
@@ -298,6 +301,7 @@ export async function getTables(): Promise<Table[]> {
         description: o.description,
         amount: o.amount,
         date: o.date,
+        quantity: o.quantity ?? 1,
       })),
     })
   }
@@ -324,25 +328,28 @@ export async function deleteTable(tableId: string): Promise<void> {
 
 export async function addTableOrder(tableId: string, order: Omit<Order, 'id'>): Promise<Order> {
   const id = crypto.randomUUID()
+  const quantity = order.quantity ?? 1
   await db.tableOrders.add({
     id,
     tableId,
     description: order.description,
     amount: order.amount,
     date: order.date,
+    quantity,
   })
-  return { id, ...order }
+  return { id, ...order, quantity }
 }
 
 export async function updateTableOrder(
   tableId: string,
   orderId: string,
-  updates: { description?: string; amount?: number }
+  updates: { description?: string; amount?: number; quantity?: number }
 ): Promise<void> {
   const row = await db.tableOrders.get(orderId)
   if (!row || row.tableId !== tableId) return
   if (updates.description != null) row.description = updates.description
   if (updates.amount != null) row.amount = updates.amount
+  if (updates.quantity != null) row.quantity = updates.quantity
   await db.tableOrders.put(row)
 }
 
@@ -367,6 +374,7 @@ export async function getHistory(): Promise<HistoryEntry[]> {
         description: o.description,
         amount: o.amount,
         date: o.date,
+        quantity: o.quantity ?? 1,
       })),
     })
   }
@@ -393,6 +401,7 @@ export async function addHistoryEntry(entry: {
       description: o.description,
       amount: o.amount,
       date: o.date,
+      quantity: o.quantity ?? 1,
     })
   }
   return {

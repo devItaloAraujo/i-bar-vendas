@@ -59,3 +59,16 @@ cd ..
 2. Clique no ícone ⊕ na barra de endereço
 3. Clique "Instalar"
 4. O app funciona 100% offline após a primeira instalação
+
+## Como atualizar o app na máquina do cliente (após novo deploy)
+
+Depois que você fizer um novo deploy (`npm run deploy`), o cliente precisa **atualizar o app** para ver as mudanças:
+
+1. **Feche o app completamente** (feche a janela do iBar-vendas instalado).
+2. **Abra de novo** pelo ícone do app (área de trabalho ou menu do sistema).
+
+Ou, se o app estiver aberto em uma aba do navegador:
+
+- **Atualize a página**: F5 (Windows/Linux) ou Cmd+R (Mac), ou use o botão de atualizar do navegador.
+
+O PWA está configurado para buscar atualizações automaticamente. Na próxima abertura (ou após dar F5), o app já estará na versão nova.

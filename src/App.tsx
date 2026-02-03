@@ -103,7 +103,8 @@ export default function App() {
   const [newTableName, setNewTableName] = useState('')
   const [editOrderModal, setEditOrderModal] = useState<{ tableId: string; order: Order } | null>(null)
   const [editOrderDescription, setEditOrderDescription] = useState('')
-  const [editOrderAmount, setEditOrderAmount] = useState('')
+  const [editOrderQuantity, setEditOrderQuantity] = useState(1)
+  const [editOrderUnitPrice, setEditOrderUnitPrice] = useState('')
   const [removeConfirm, setRemoveConfirm] = useState<{
     tableId: string
     orderId: string
@@ -156,16 +157,32 @@ export default function App() {
     0
   )
 
-  function addOrderFromProduct(description: string, amount: number) {
+  /** Parses order description: if it ends with " x N", returns base name and N; otherwise description and quantity from order. */
+  function parseOrderForEdit(description: string, quantityFromOrder?: number): { baseDescription: string; quantity: number } {
+    const match = description.trim().match(/^(.*)\s+x\s*(\d+)$/i)
+    if (match) {
+      return { baseDescription: match[1].trim(), quantity: parseInt(match[2], 10) || 1 }
+    }
+    return { baseDescription: description.trim(), quantity: quantityFromOrder ?? 1 }
+  }
+
+  /** Display label for an order: "Product name" or "Product name xN" (N from quantity, never baked into name). */
+  function orderDisplayLabel(order: Order): string {
+    const { baseDescription, quantity } = parseOrderForEdit(order.description, order.quantity)
+    return quantity > 1 ? `${baseDescription} x${quantity}` : baseDescription
+  }
+
+  function addOrderFromProduct(description: string, amount: number, quantity: number = 1) {
     if (!saleTableId || amount <= 0) return
-    addTableOrder(saleTableId, { description, amount, date: today }).then((order) => {
+    addTableOrder(saleTableId, { description, amount, date: today, quantity }).then((order) => {
       setTables((prev) =>
         prev.map((t) =>
           t.id === saleTableId ? { ...t, orders: [...t.orders, order] } : t
         )
       )
       setPendingProductChoice(null)
-      setToasts((prev) => [...prev, { id: crypto.randomUUID(), message: `${description} adicionado à mesa`, type: 'success' }])
+      const label = quantity > 1 ? `${description} x${quantity}` : description
+      setToasts((prev) => [...prev, { id: crypto.randomUUID(), message: `${label} adicionado à mesa`, type: 'success' }])
     })
   }
 
@@ -242,8 +259,11 @@ export default function App() {
 
   function openEditOrderModal(tableId: string, order: Order) {
     setEditOrderModal({ tableId, order })
-    setEditOrderDescription(order.description)
-    setEditOrderAmount(order.amount.toString().replace('.', ','))
+    const { baseDescription, quantity } = parseOrderForEdit(order.description, order.quantity)
+    setEditOrderDescription(baseDescription)
+    setEditOrderQuantity(quantity)
+    const unit = quantity > 0 ? order.amount / quantity : order.amount
+    setEditOrderUnitPrice(unit.toFixed(2).replace('.', ','))
   }
 
   function removeOrder(tableId: string, orderId: string) {
@@ -257,22 +277,66 @@ export default function App() {
     })
   }
 
-  function updateOrder(tableId: string, orderId: string, description: string, amount: number) {
-    if (amount <= 0) return
-    updateTableOrder(tableId, orderId, { description: description.trim(), amount }).then(() => {
+  function updateOrder(
+    tableId: string,
+    orderId: string,
+    description: string,
+    quantity: number,
+    unitPrice: number
+  ) {
+    if (quantity < 1 || unitPrice <= 0) return
+    const amount = Math.round(unitPrice * quantity * 100) / 100
+    const displayLabel = quantity > 1 ? `${description.trim()} x${quantity}` : description.trim()
+    updateTableOrder(tableId, orderId, {
+      description: description.trim(),
+      amount,
+      quantity,
+    }).then(() => {
       setTables((prev) =>
         prev.map((t) =>
           t.id === tableId
             ? {
                 ...t,
                 orders: t.orders.map((o) =>
-                  o.id === orderId ? { ...o, description: description.trim(), amount } : o
+                  o.id === orderId
+                    ? { ...o, description: description.trim(), amount, quantity }
+                    : o
                 ),
               }
             : t
         )
       )
       setEditOrderModal(null)
+      setToasts((prev) => [...prev, { id: crypto.randomUUID(), message: `${displayLabel} atualizado`, type: 'success' }])
+    })
+  }
+
+  function incrementOrderQuantity(tableId: string, order: Order) {
+    const { baseDescription, quantity } = parseOrderForEdit(order.description, order.quantity)
+    const newQty = quantity + 1
+    const unitPrice = quantity > 0 ? order.amount / quantity : order.amount
+    const newAmount = Math.round(unitPrice * newQty * 100) / 100
+    updateTableOrder(tableId, order.id, {
+      description: baseDescription,
+      amount: newAmount,
+      quantity: newQty,
+    }).then(() => {
+      setTables((prev) =>
+        prev.map((t) =>
+          t.id === tableId
+            ? {
+                ...t,
+                orders: t.orders.map((o) =>
+                  o.id === order.id
+                    ? { ...o, description: baseDescription, amount: newAmount, quantity: newQty }
+                    : o
+                ),
+              }
+            : t
+        )
+      )
+      const label = newQty > 1 ? `${baseDescription} x${newQty}` : baseDescription
+      setToasts((prev) => [...prev, { id: crypto.randomUUID(), message: `${label} — quantidade atualizada`, type: 'success' }])
     })
   }
 
@@ -766,9 +830,30 @@ export default function App() {
                       <ul className="table-orders">
                         {table.orders.map((order) => (
                           <li key={order.id} className="table-order">
-                            <span className="table-order-desc">{order.description}</span>
+                            <span className="table-order-desc">
+                              {(() => {
+                                const { baseDescription, quantity } = parseOrderForEdit(order.description, order.quantity)
+                                return (
+                                  <>
+                                    {baseDescription}
+                                    {quantity > 1 && <span className="table-order-qty"> x{quantity}</span>}
+                                  </>
+                                )
+                              })()}
+                            </span>
                             <span className="table-order-right">
                               <span className="table-order-amount">{formatMoney(order.amount)}</span>
+                              <button
+                                type="button"
+                                className="table-order-plus"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  incrementOrderQuantity(table.id, order)
+                                }}
+                                aria-label={`Adicionar 1 unidade: ${orderDisplayLabel(order)}`}
+                              >
+                                <MdAdd size={18} aria-hidden />
+                              </button>
                               <button
                                 type="button"
                                 className="table-order-gear"
@@ -776,7 +861,7 @@ export default function App() {
                                   e.stopPropagation()
                                   openEditOrderModal(table.id, order)
                                 }}
-                                aria-label={`Editar ou remover: ${order.description}`}
+                                aria-label={`Editar ou remover: ${orderDisplayLabel(order)}`}
                               >
                                 <MdSettings size={16} aria-hidden />
                               </button>
@@ -881,7 +966,17 @@ export default function App() {
                       <ul className="historico-orders">
                         {entry.orders.map((order) => (
                           <li key={order.id} className="historico-order">
-                            <span className="historico-order-desc">{order.description}</span>
+                            <span className="historico-order-desc">
+                              {(() => {
+                                const { baseDescription, quantity } = parseOrderForEdit(order.description, order.quantity)
+                                return (
+                                  <>
+                                    {baseDescription}
+                                    {quantity > 1 && <span className="historico-order-qty"> x{quantity}</span>}
+                                  </>
+                                )
+                              })()}
+                            </span>
                             <span className="historico-order-amount">{formatMoney(order.amount)}</span>
                           </li>
                         ))}
@@ -1247,8 +1342,8 @@ export default function App() {
                         className="add-order-beber-levar-btn add-order-beber-levar-btn--beber"
                         onClick={() => {
                           const q = pendingProductChoice.quantity
-                          const desc = `${pendingProductChoice.productName} ${getBeverageVolumePrefix(pendingProductChoice.categoryName)}(beber)` + (q > 1 ? ` x ${q}` : '')
-                          addOrderFromProduct(desc, pendingProductChoice.priceDrink! * q)
+                          const desc = `${pendingProductChoice.productName} ${getBeverageVolumePrefix(pendingProductChoice.categoryName)}(beber)`
+                          addOrderFromProduct(desc, pendingProductChoice.priceDrink! * q, q)
                           setPendingProductChoice(null)
                         }}
                       >
@@ -1259,8 +1354,8 @@ export default function App() {
                         className="add-order-beber-levar-btn add-order-beber-levar-btn--levar"
                         onClick={() => {
                           const q = pendingProductChoice.quantity
-                          const desc = `${pendingProductChoice.productName} ${getBeverageVolumePrefix(pendingProductChoice.categoryName)}(levar)` + (q > 1 ? ` x ${q}` : '')
-                          addOrderFromProduct(desc, pendingProductChoice.priceTakeaway! * q)
+                          const desc = `${pendingProductChoice.productName} ${getBeverageVolumePrefix(pendingProductChoice.categoryName)}(levar)`
+                          addOrderFromProduct(desc, pendingProductChoice.priceTakeaway! * q, q)
                           setPendingProductChoice(null)
                         }}
                       >
@@ -1273,8 +1368,8 @@ export default function App() {
                       className="add-order-beber-levar-btn add-order-quantity-add-btn"
                       onClick={() => {
                         const q = pendingProductChoice.quantity
-                        const desc = formatOrderDescription(pendingProductChoice.productName, pendingProductChoice.categoryName) + (q > 1 ? ` x ${q}` : '')
-                        addOrderFromProduct(desc, pendingProductChoice.price! * q)
+                        const desc = formatOrderDescription(pendingProductChoice.productName, pendingProductChoice.categoryName)
+                        addOrderFromProduct(desc, pendingProductChoice.price! * q, q)
                         setPendingProductChoice(null)
                       }}
                     >
@@ -1877,19 +1972,20 @@ export default function App() {
                 Item da mesa
               </h2>
               <p className="add-desc edit-order-item-name">
-                <strong>{editOrderModal.order.description}</strong>
+                <strong>{orderDisplayLabel(editOrderModal.order)}</strong>
               </p>
               <form
                 className="add-form"
                 onSubmit={(e) => {
                   e.preventDefault()
-                  const amount = parseFloat(editOrderAmount.replace(',', '.'))
-                  if (!isNaN(amount) && amount > 0) {
+                  const unit = parsePrice(editOrderUnitPrice)
+                  if (!isNaN(unit) && unit > 0 && editOrderQuantity >= 1) {
                     updateOrder(
                       editOrderModal.tableId,
                       editOrderModal.order.id,
                       editOrderDescription.trim(),
-                      amount
+                      editOrderQuantity,
+                      unit
                     )
                   }
                 }}
@@ -1902,39 +1998,54 @@ export default function App() {
                   onChange={(e) => setEditOrderDescription(e.target.value)}
                   placeholder="Nome do item"
                 />
-                <label className="add-label">Valor (R$)</label>
-                <div className="price-input-wrap">
+                <label className="add-label">Quantidade</label>
+                <div className="edit-order-qty-wrap">
                   <button
                     type="button"
-                    className="price-input-btn price-input-btn--minus"
-                    onClick={() => {
-                      const v = Math.max(0, parsePrice(editOrderAmount) - 0.5)
-                      setEditOrderAmount(formatPrice(v))
-                    }}
-                    aria-label="Diminuir R$ 0,50"
+                    className="edit-order-qty-btn"
+                    onClick={() => setEditOrderQuantity((q) => Math.max(1, q - 1))}
+                    aria-label="Diminuir quantidade"
                   >
                     −
                   </button>
                   <input
-                    type="text"
-                    inputMode="decimal"
-                    placeholder="0,00"
-                    className="add-input price-input"
-                    value={editOrderAmount}
-                    onChange={(e) => setEditOrderAmount(e.target.value.replace(/[^\d,.]/g, ''))}
+                    type="number"
+                    min={1}
+                    className="add-input edit-order-qty-input"
+                    value={editOrderQuantity}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10)
+                      if (!isNaN(n) && n >= 1) setEditOrderQuantity(n)
+                    }}
                   />
                   <button
                     type="button"
-                    className="price-input-btn price-input-btn--plus"
-                    onClick={() => {
-                      const v = parsePrice(editOrderAmount) + 0.5
-                      setEditOrderAmount(formatPrice(v))
-                    }}
-                    aria-label="Aumentar R$ 0,50"
+                    className="edit-order-qty-btn"
+                    onClick={() => setEditOrderQuantity((q) => q + 1)}
+                    aria-label="Aumentar quantidade"
                   >
                     +
                   </button>
                 </div>
+                <label className="add-label">Preço unitário (R$)</label>
+                <div className="edit-order-price-wrap">
+                  <span className="edit-order-currency">R$</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    placeholder="0,00"
+                    className="add-input edit-order-price-input"
+                    value={editOrderUnitPrice}
+                    onChange={(e) =>
+                      setEditOrderUnitPrice(e.target.value.replace(/[^\d,.]/g, ''))
+                    }
+                  />
+                </div>
+                {editOrderQuantity > 1 && (
+                  <p className="edit-order-total-line" aria-live="polite">
+                    Total: <strong>{formatMoney(parsePrice(editOrderUnitPrice) * editOrderQuantity)}</strong>
+                  </p>
+                )}
                 <div className="edit-order-actions">
                   <button
                     type="button"
@@ -1943,7 +2054,7 @@ export default function App() {
                       setRemoveConfirm({
                         tableId: editOrderModal.tableId,
                         orderId: editOrderModal.order.id,
-                        description: editOrderModal.order.description,
+                        description: orderDisplayLabel(editOrderModal.order),
                       })
                     }
                   >
@@ -1955,9 +2066,10 @@ export default function App() {
                       className="add-btn edit-order-btn-save"
                       disabled={
                         !editOrderDescription.trim() ||
-                        !editOrderAmount.trim() ||
-                        isNaN(parseFloat(editOrderAmount.replace(',', '.'))) ||
-                        parseFloat(editOrderAmount.replace(',', '.')) <= 0
+                        !editOrderUnitPrice.trim() ||
+                        isNaN(parsePrice(editOrderUnitPrice)) ||
+                        parsePrice(editOrderUnitPrice) <= 0 ||
+                        editOrderQuantity < 1
                       }
                     >
                       Salvar
@@ -2060,7 +2172,7 @@ export default function App() {
                 <ul className="close-account-summary">
                   {closeAccountModal.orders.map((order) => (
                     <li key={order.id} className="close-account-summary-item">
-                      <span className="close-account-summary-desc">{order.description}</span>
+                      <span className="close-account-summary-desc">{orderDisplayLabel(order)}</span>
                       <span className="close-account-summary-amount">{formatMoney(order.amount)}</span>
                     </li>
                   ))}
@@ -2825,6 +2937,12 @@ const styles = `
     color: var(--text);
   }
 
+  .table-order-qty {
+    font-size: 0.85em;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
   .table-order-right {
     display: flex;
     align-items: center;
@@ -2834,6 +2952,29 @@ const styles = `
   .table-order-amount {
     font-weight: 600;
     color: var(--accent);
+  }
+
+  .table-order-plus {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.25rem;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.2s, background 0.2s;
+  }
+
+  .table-order-plus:hover {
+    color: var(--accent);
+    background: var(--accent-muted);
+  }
+
+  .table-order-plus:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent-muted);
   }
 
   .table-order-gear {
@@ -3067,6 +3208,12 @@ const styles = `
 
   .historico-order-desc {
     color: var(--text);
+  }
+
+  .historico-order-qty {
+    font-size: 0.85em;
+    color: var(--text-muted);
+    font-weight: 500;
   }
 
   .historico-order-amount {
@@ -3630,6 +3777,104 @@ const styles = `
   .edit-order-item-name strong {
     font-weight: 600;
     color: var(--text);
+  }
+
+  .edit-order-qty-wrap {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    overflow: hidden;
+    width: fit-content;
+  }
+
+  .edit-order-qty-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.75rem;
+    flex-shrink: 0;
+    border: none;
+    background: var(--border);
+    color: var(--text);
+    font-size: 1.25rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    transition: background var(--transition), color var(--transition);
+  }
+
+  .edit-order-qty-btn:hover {
+    background: var(--accent-muted);
+    color: var(--accent);
+  }
+
+  .edit-order-qty-input {
+    width: 3.5rem;
+    text-align: center;
+    border: none;
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    border-radius: 0;
+    -moz-appearance: textfield;
+  }
+
+  .edit-order-qty-input::-webkit-outer-spin-button,
+  .edit-order-qty-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  .edit-order-price-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    min-height: 2.75rem;
+    width: fit-content;
+    max-width: 12rem;
+  }
+
+  .edit-order-price-wrap:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-muted);
+  }
+
+  .edit-order-currency {
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--text-muted);
+  }
+
+  .edit-order-price-input {
+    width: 5.5rem;
+    min-width: 0;
+    border: none;
+    padding: 0.6rem 0;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-size: 1.05rem;
+    font-weight: 600;
+  }
+
+  .edit-order-price-input:focus {
+    outline: none;
+    box-shadow: none;
+  }
+
+  .edit-order-total-line {
+    margin: 0;
+    font-size: 0.95rem;
+    color: var(--text-muted);
+  }
+
+  .edit-order-total-line strong {
+    color: var(--accent);
+    font-size: 1.05rem;
   }
 
   .edit-order-actions {
