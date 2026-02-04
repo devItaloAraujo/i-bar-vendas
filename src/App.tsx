@@ -36,7 +36,15 @@ function formatMoney(value: number) {
 }
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10)
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** True if the ISO timestamp falls on the same calendar day (local time) as the given YYYY-MM-DD local date. */
+function isSameLocalDay(isoString: string, localDateYYYYMMDD: string): boolean {
+  const d = new Date(isoString)
+  const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return local === localDateYYYYMMDD
 }
 
 function getBeverageVolumePrefix(category: string): string {
@@ -158,7 +166,7 @@ export default function App() {
 
   const today = todayISO()
   const dailyTotal = history
-    .filter((entry) => entry.paidAt.slice(0, 10) === today)
+    .filter((entry) => isSameLocalDay(entry.paidAt, today))
     .reduce(
       (sum, entry) => sum + entry.orders.reduce((s, o) => s + o.amount, 0),
       0
