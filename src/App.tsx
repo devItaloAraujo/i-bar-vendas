@@ -363,7 +363,7 @@ export default function App() {
     })
   }
 
-  const PAYMENT_METHODS = ['Crédito', 'Débito', 'Pix', 'Dinheiro', 'Anotado na conta'] as const
+  const PAYMENT_METHODS = ['Crédito', 'Débito', 'Pix', 'Dinheiro', 'Voucher', 'Anotado na conta'] as const
 
   function closeTableWithPayment(tableId: string, paymentMethod: string) {
     const table = tables.find((t) => t.id === tableId)
