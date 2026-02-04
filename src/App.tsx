@@ -157,10 +157,12 @@ export default function App() {
   const pendingQuickSaleRef = useRef<{ total: number; paymentMethod: string } | null>(null)
 
   const today = todayISO()
-  const dailyTotal = history.reduce(
-    (sum, entry) => sum + entry.orders.reduce((s, o) => s + o.amount, 0),
-    0
-  )
+  const dailyTotal = history
+    .filter((entry) => entry.paidAt.slice(0, 10) === today)
+    .reduce(
+      (sum, entry) => sum + entry.orders.reduce((s, o) => s + o.amount, 0),
+      0
+    )
 
   /** Parses order description: if it ends with " x N", returns base name and N; otherwise description and quantity from order. */
   function parseOrderForEdit(description: string, quantityFromOrder?: number): { baseDescription: string; quantity: number } {
