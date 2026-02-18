@@ -9,6 +9,7 @@ import {
   getCategoriesWithItems,
   addTable as dbAddTable,
   updateTable as dbUpdateTable,
+  deleteTable as dbDeleteTable,
   addTableOrder,
   updateTableOrder,
   deleteTableOrder,
@@ -158,6 +159,7 @@ export default function App() {
   const [historyEditConfirm, setHistoryEditConfirm] = useState<HistoryEntry | null>(null)
   const [editingHistoryEntry, setEditingHistoryEntry] = useState<HistoryEntry | null>(null)
   const [editingHistoryTotalInput, setEditingHistoryTotalInput] = useState('')
+  const [removeTableConfirm, setRemoveTableConfirm] = useState<{ tableId: string; tableName: string } | null>(null)
   const newTableInputRef = useRef<HTMLInputElement>(null)
   const editingTableNameInputRef = useRef<HTMLInputElement>(null)
   const novoClientePlaceholderRef = useRef<HTMLButtonElement>(null)
@@ -608,6 +610,9 @@ export default function App() {
       } else if (historyEditConfirm) {
         e.preventDefault()
         setHistoryEditConfirm(null)
+      } else if (removeTableConfirm) {
+        e.preventDefault()
+        setRemoveTableConfirm(null)
       } else if (editingHistoryEntry) {
         e.preventDefault()
         closeHistoryEdit()
@@ -635,6 +640,7 @@ export default function App() {
       newCategoryOpen ||
       newProductOpen ||
       !!editProductModal ||
+      !!removeTableConfirm ||
       !!historyEditConfirm ||
       !!editingHistoryEntry
     if (!anyModalOpen) return
@@ -643,7 +649,7 @@ export default function App() {
     return () => {
       document.body.style.overflow = prev
     }
-  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, relatorioModalOpen, newCategoryOpen, newProductOpen, editProductModal, historyEditConfirm, editingHistoryEntry])
+  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, relatorioModalOpen, newCategoryOpen, newProductOpen, editProductModal, removeTableConfirm, historyEditConfirm, editingHistoryEntry])
 
   useEffect(() => {
     if (!newTableOpen) return
@@ -899,7 +905,20 @@ export default function App() {
                         <h2 className="table-card-title table-card-title--client">{table.name}</h2>
                       )}
                     </div>
-                    <span className="table-card-total">{formatMoney(tableTotal(table))}</span>
+                    <div className="table-card-header-right">
+                      <span className="table-card-total">{formatMoney(tableTotal(table))}</span>
+                      <button
+                        type="button"
+                        className="table-card-header-close"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setRemoveTableConfirm({ tableId: table.id, tableName: table.name })
+                        }}
+                        aria-label={`Excluir comanda de ${table.name}`}
+                      >
+                        <MdClose size={16} aria-hidden />
+                      </button>
+                    </div>
                   </div>
                   <div
                     className="table-card-body"
@@ -2305,6 +2324,63 @@ export default function App() {
         </>
       )}
 
+      {/* Remover comanda (mesa) */}
+      {removeTableConfirm && (
+        <>
+          <div
+            className="confirm-overlay"
+            onClick={() => setRemoveTableConfirm(null)}
+            aria-hidden
+          />
+          <div
+            className="confirm-panel-wrap"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-table-title"
+            aria-describedby="confirm-table-desc"
+          >
+            <div className="confirm-panel" onClick={(e) => e.stopPropagation()}>
+              <h2 id="confirm-table-title" className="confirm-title">
+                Excluir comanda
+              </h2>
+              <p id="confirm-table-desc" className="confirm-desc">
+                Gostaria de excluir a comanda de <strong>"{removeTableConfirm.tableName}"</strong>?
+              </p>
+              <div className="confirm-actions">
+                <button
+                  type="button"
+                  className="add-btn confirm-btn-cancel"
+                  onClick={() => setRemoveTableConfirm(null)}
+                >
+                  Não
+                </button>
+                <button
+                  type="button"
+                  className="add-btn confirm-btn-remove"
+                  onClick={async () => {
+                    const data = removeTableConfirm
+                    if (!data) return
+                    await dbDeleteTable(data.tableId)
+                    setTables((prev) => prev.filter((t) => t.id !== data.tableId))
+                    setRemoveTableConfirm(null)
+                    setToasts((prev) => [
+                      ...prev,
+                      {
+                        id: crypto.randomUUID(),
+                        message: `Comanda de ${data.tableName} excluída`,
+                        type: 'remove',
+                      },
+                    ])
+                  }}
+                >
+                  Sim, excluir
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* Fechar a conta — payment method modal */}
       {closeAccountModal && (
         <>
@@ -3200,6 +3276,32 @@ const styles = `
     min-width: 0;
   }
 
+  .table-card-header-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 999px;
+    border: none;
+    background: rgba(0, 0, 0, 0.04);
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+    transition: background 0.2s ease, color 0.2s ease, transform 0.1s ease;
+  }
+
+  .table-card-header-close:hover {
+    background: rgba(0, 0, 0, 0.08);
+    color: var(--text);
+    transform: translateY(-1px);
+  }
+
+  .table-card-header-close:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent-muted);
+  }
+
   .table-card-header-icon {
     flex-shrink: 0;
     color: var(--accent);
@@ -3268,6 +3370,12 @@ const styles = `
 
   .table-card-placeholder:hover .table-card-placeholder-label {
     color: var(--accent);
+  }
+
+  .table-card-header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
 
   .table-card-total {
