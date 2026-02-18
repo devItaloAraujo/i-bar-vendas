@@ -14,6 +14,7 @@ import {
   updateTableOrder,
   deleteTableOrder,
   closeTableAndAddToHistory,
+  closeTableAndAddSplitToHistory,
   addHistoryEntry,
   updateHistoryEntry,
   addCategory as dbAddCategory,
@@ -124,6 +125,8 @@ export default function App() {
   const [closeAccountModal, setCloseAccountModal] = useState<Table | null>(null)
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string | null>(null)
   const [closeAccountExiting, setCloseAccountExiting] = useState(false)
+  const [splitPaymentModalTable, setSplitPaymentModalTable] = useState<Table | null>(null)
+  const [splitAmounts, setSplitAmounts] = useState<Record<string, string>>({})
   const [totalJustUpdated, setTotalJustUpdated] = useState(false)
   const [toasts, setToasts] = useState<Array<{ id: string; message: string; exiting?: boolean; type?: 'success' | 'remove' }>>([])
   const [showWelcome, setShowWelcome] = useState(true)
@@ -171,12 +174,11 @@ export default function App() {
   const pendingQuickSaleRef = useRef<{ total: number; paymentMethod: string } | null>(null)
 
   const today = todayISO()
+  const historyEntryTotal = (e: HistoryEntry) =>
+    e.displayAmount != null ? e.displayAmount : e.orders.reduce((s, o) => s + o.amount, 0)
   const dailyTotal = history
     .filter((entry) => isSameLocalDay(entry.paidAt, today))
-    .reduce(
-      (sum, entry) => sum + entry.orders.reduce((s, o) => s + o.amount, 0),
-      0
-    )
+    .reduce((sum, entry) => sum + historyEntryTotal(entry), 0)
 
   /** Parses order description: if it ends with " x N", returns base name and N; otherwise description and quantity from order. */
   function parseOrderForEdit(description: string, quantityFromOrder?: number): { baseDescription: string; quantity: number } {
@@ -378,6 +380,7 @@ export default function App() {
   }
 
   const PAYMENT_METHODS = ['Crédito', 'Débito', 'Pix', 'Dinheiro', 'Voucher', 'Anotado na conta'] as const
+  const MULTIPLE_PAYMENTS_LABEL = 'Múltiplas formas'
 
   function closeTableWithPayment(tableId: string, paymentMethod: string) {
     const table = tables.find((t) => t.id === tableId)
@@ -398,11 +401,10 @@ export default function App() {
   }
 
   const tableTotal = (t: Table) => t.orders.reduce((s, o) => s + o.amount, 0)
-  const historyEntryTotal = (e: HistoryEntry) => e.orders.reduce((s, o) => s + o.amount, 0)
 
   function openHistoryEdit(entry: HistoryEntry) {
     setEditingHistoryEntry(entry)
-    const total = entry.orders.reduce((s, o) => s + o.amount, 0)
+    const total = historyEntryTotal(entry)
     setEditingHistoryTotalInput(total === 0 ? '' : formatPrice(total))
   }
 
@@ -616,6 +618,10 @@ export default function App() {
       } else if (editingHistoryEntry) {
         e.preventDefault()
         closeHistoryEdit()
+      } else if (splitPaymentModalTable) {
+        e.preventDefault()
+        setSplitPaymentModalTable(null)
+        setSplitAmounts({})
       } else if (addOpen) {
         e.preventDefault()
         setAddOpen(false)
@@ -626,7 +632,7 @@ export default function App() {
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, editProductModal, newCategoryOpen, newProductOpen, historyEditConfirm, editingHistoryEntry])
+  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, splitPaymentModalTable, editProductModal, newCategoryOpen, newProductOpen, historyEditConfirm, editingHistoryEntry])
 
   useEffect(() => {
     const anyModalOpen =
@@ -636,6 +642,7 @@ export default function App() {
       !!removeConfirm ||
       !!removeProductConfirm ||
       !!closeAccountModal ||
+      !!splitPaymentModalTable ||
       relatorioModalOpen ||
       newCategoryOpen ||
       newProductOpen ||
@@ -649,7 +656,7 @@ export default function App() {
     return () => {
       document.body.style.overflow = prev
     }
-  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, relatorioModalOpen, newCategoryOpen, newProductOpen, editProductModal, removeTableConfirm, historyEditConfirm, editingHistoryEntry])
+  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, splitPaymentModalTable, relatorioModalOpen, newCategoryOpen, newProductOpen, editProductModal, removeTableConfirm, historyEditConfirm, editingHistoryEntry])
 
   useEffect(() => {
     if (!newTableOpen) return
@@ -1113,7 +1120,18 @@ export default function App() {
                       <div className="historico-card-header">
                         <h2 className="historico-card-title">
                           <MdReceipt size={20} className="historico-card-icon" aria-hidden />
-                          {entry.clientName}
+                          {(() => {
+                            const m = entry.clientName.match(/^(.+?)\s*\.?\s*\((\d+)\/(\d+)\)\s*$/)
+                            if (m) {
+                              return (
+                                <>
+                                  {m[1].trimEnd()}
+                                  <span className="historico-card-title-split"> · ({m[2]}/{m[3]})</span>
+                                </>
+                              )
+                            }
+                            return entry.clientName
+                          })()}
                         </h2>
                         <div className="historico-card-header-right">
                           <span className="historico-card-total">
@@ -2434,6 +2452,18 @@ export default function App() {
                     {method}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className="add-btn close-account-method-btn close-account-method-btn--split"
+                  onClick={() => {
+                    setSplitPaymentModalTable(closeAccountModal)
+                    setSplitAmounts({})
+                    setCloseAccountModal(null)
+                    setSelectedPaymentMethod(null)
+                  }}
+                >
+                  {MULTIPLE_PAYMENTS_LABEL}
+                </button>
               </div>
               <div className="close-account-actions">
                 <button
@@ -2461,6 +2491,145 @@ export default function App() {
                   Cancelar
                 </button>
               </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Múltiplas formas de pagamento — split payment modal */}
+      {splitPaymentModalTable && (
+        <>
+          <div
+            className="add-overlay close-account-overlay close-account-overlay--open"
+            onClick={() => { setSplitPaymentModalTable(null); setSplitAmounts({}) }}
+            aria-hidden
+          />
+          <div
+            className="add-panel-wrap close-account-panel-wrap close-account-panel-wrap--open split-payment-panel-wrap"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="split-payment-title"
+          >
+            <div className="add-panel close-account-panel split-payment-panel" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className="add-panel-close"
+                onClick={() => { setSplitPaymentModalTable(null); setSplitAmounts({}) }}
+                aria-label="Fechar"
+              >
+                <MdClose size={20} aria-hidden />
+              </button>
+              <h2 id="split-payment-title" className="add-title add-title--client">
+                <MdReceipt size={20} aria-hidden />
+                {splitPaymentModalTable.name} — Múltiplas formas
+              </h2>
+              <p className="close-account-total split-payment-total">
+                Total: <strong>{formatMoney(tableTotal(splitPaymentModalTable))}</strong>
+              </p>
+              <div className="split-payment-inputs">
+                {PAYMENT_METHODS.map((method) => (
+                  <div key={method} className="split-payment-row">
+                    <label className="split-payment-label" htmlFor={`split-${method}`}>
+                      {method}
+                    </label>
+                    <input
+                      id={`split-${method}`}
+                      type="text"
+                      inputMode="decimal"
+                      className="split-payment-input"
+                      placeholder="0,00"
+                      value={splitAmounts[method] ?? ''}
+                      onChange={(e) => {
+                        const v = e.target.value.replace(/[^\d,.]/g, '')
+                        setSplitAmounts((prev) => ({ ...prev, [method]: v }))
+                      }}
+                      onBlur={() => {
+                        const raw = splitAmounts[method] ?? ''
+                        const n = Math.round(parsePrice(raw) * 100) / 100
+                        if (!n) {
+                          setSplitAmounts((prev) => {
+                            const { [method]: _omit, ...rest } = prev
+                            return rest
+                          })
+                        } else {
+                          setSplitAmounts((prev) => ({
+                            ...prev,
+                            [method]: formatPrice(n),
+                          }))
+                        }
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+              {(() => {
+                const total = tableTotal(splitPaymentModalTable)
+                const sum = PAYMENT_METHODS.reduce(
+                  (s, m) => s + (parsePrice(splitAmounts[m] ?? '') || 0),
+                  0
+                )
+                const diff = Math.round((sum - total) * 100) / 100
+                const isExact = Math.abs(diff) < 0.01
+                const statusClass = isExact
+                  ? 'split-payment-falta--ok'
+                  : Math.sign(diff) === -1
+                    ? 'split-payment-falta--error'
+                    : 'split-payment-falta--error'
+                const faltaAbs = Math.abs(Math.round((total - sum) * 100) / 100)
+                return (
+                  <>
+                    <p className={`split-payment-falta ${statusClass}`}>
+                      {isExact
+                        ? 'Total correto.'
+                        : diff < 0
+                          ? `Falta: ${formatMoney(faltaAbs)}`
+                          : `Excedeu: ${formatMoney(faltaAbs)}`}
+                    </p>
+                    <div className="close-account-actions">
+                      <button
+                        type="button"
+                        className="add-btn close-account-confirm-btn add-btn--primary"
+                        disabled={!isExact}
+                        onClick={() => {
+                          if (!isExact) return
+                          const splits = PAYMENT_METHODS.filter((m) => parsePrice(splitAmounts[m] ?? '') > 0).map(
+                            (m) => ({ paymentMethod: m, amount: parsePrice(splitAmounts[m] ?? '') })
+                          )
+                          if (splits.length === 0) return
+                          closeTableAndAddSplitToHistory(
+                            splitPaymentModalTable.id,
+                            splitPaymentModalTable,
+                            splits
+                          ).then((newEntries) => {
+                            setHistory((prev) => [...newEntries, ...prev])
+                            setTables((prev) => prev.filter((t) => t.id !== splitPaymentModalTable.id))
+                            setSplitPaymentModalTable(null)
+                            setSplitAmounts({})
+                            setToasts((prev) => [
+                              ...prev,
+                              {
+                                id: crypto.randomUUID(),
+                                message: `${splitPaymentModalTable.name} — Venda registrada!`,
+                                type: 'success',
+                              },
+                            ])
+                            setTotalJustUpdated(true)
+                          })
+                        }}
+                      >
+                        Confirmar pagamento
+                      </button>
+                      <button
+                        type="button"
+                        className="add-btn close-account-cancel-btn"
+                        onClick={() => { setSplitPaymentModalTable(null); setSplitAmounts({}) }}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </>
+                )
+              })()}
             </div>
           </div>
         </>
@@ -2651,7 +2820,7 @@ export default function App() {
             aria-modal="true"
             aria-labelledby="edit-history-title"
           >
-            <div className="add-panel add-panel--product-form" onClick={(e) => e.stopPropagation()}>
+            <div className="add-panel add-panel--product-form edit-history-panel" onClick={(e) => e.stopPropagation()}>
               <button
                 type="button"
                 className="add-panel-close"
@@ -2664,29 +2833,37 @@ export default function App() {
                 <MdEdit size={20} aria-hidden />
                 Editar venda — {editingHistoryEntry.clientName}
               </h2>
-              <p className="add-desc">
-                Ajuste o total da venda. Em vendas rápidas, o valor do item acompanha o total. Nos demais casos, se o total for diferente da soma dos itens, será criado um item &quot;Ajuste&quot;.
-              </p>
+              {editingHistoryEntry.paymentMethod != null && editingHistoryEntry.paymentMethod !== '' && (
+                <p className="edit-history-payment">
+                  Método de pagamento: <strong>{editingHistoryEntry.paymentMethod}</strong>
+                </p>
+              )}
               <form
                 className="add-form"
                 onSubmit={async (e) => {
                   e.preventDefault()
                   if (!editingHistoryEntry) return
                   const totalFromInput = Math.round(parsePrice(editingHistoryTotalInput) * 100) / 100
-                  const isVendaRapida =
-                    editingHistoryEntry.clientName === 'venda rapida' &&
-                    editingHistoryEntry.orders.length === 1 &&
-                    editingHistoryEntry.orders[0].description === 'Venda rápida'
+                  const isSplitCard = editingHistoryEntry.displayAmount != null
                   let finalOrders: Order[]
-                  if (isVendaRapida) {
-                    const single = editingHistoryEntry.orders[0]
-                    finalOrders = [
-                      {
-                        ...single,
-                        amount: totalFromInput,
-                        quantity: 1,
-                      },
-                    ]
+                  let newDisplayAmount: number | undefined
+                  if (isSplitCard) {
+                    finalOrders = [...editingHistoryEntry.orders]
+                    const baseTotal = editingHistoryEntry.displayAmount ?? 0
+                    const diff = Math.round((totalFromInput - baseTotal) * 100) / 100
+                    if (Math.abs(diff) >= 0.01) {
+                      finalOrders = [
+                        ...finalOrders,
+                        {
+                          id: crypto.randomUUID(),
+                          description: 'Ajuste',
+                          amount: diff,
+                          date: finalOrders[0]?.date ?? todayISO(),
+                          quantity: 1,
+                        } as Order,
+                      ]
+                    }
+                    newDisplayAmount = totalFromInput
                   } else {
                     finalOrders = [...editingHistoryEntry.orders]
                     const sumItems = finalOrders.reduce((s, o) => s + o.amount, 0)
@@ -2704,12 +2881,15 @@ export default function App() {
                       ]
                     }
                   }
-                  await updateHistoryEntry(editingHistoryEntry.id, { orders: finalOrders })
+                  await updateHistoryEntry(editingHistoryEntry.id, {
+                    orders: finalOrders,
+                    ...(newDisplayAmount !== undefined && { displayAmount: newDisplayAmount }),
+                  })
                   const editedAt = new Date().toISOString()
                   setHistory((prev) =>
                     prev.map((e) =>
                       e.id === editingHistoryEntry.id
-                        ? { ...e, orders: finalOrders, editedAt }
+                        ? { ...e, orders: finalOrders, editedAt, ...(newDisplayAmount !== undefined && { displayAmount: newDisplayAmount }) }
                         : e
                     )
                   )
@@ -2725,7 +2905,7 @@ export default function App() {
                 }}
               >
                 <div className="edit-history-total-wrap">
-                  <label className="add-label">Total da venda (R$)</label>
+                  <label className="add-label">Total da venda </label>
                   <div className="edit-order-price-wrap edit-history-total-input-wrap">
                     <span className="edit-order-currency">R$</span>
                     <input
@@ -2746,32 +2926,7 @@ export default function App() {
                     </strong>
                   </p>
                 </div>
-                <p className="add-label edit-history-items-label">Itens da venda</p>
-                <div className="close-account-summary-scroll">
-                  <ul className="close-account-summary">
-                    {editingHistoryEntry.clientName === 'venda rapida' &&
-                    editingHistoryEntry.orders.length === 1 ? (
-                      <li className="close-account-summary-item">
-                        <span className="close-account-summary-desc">Venda rápida</span>
-                        <span className="close-account-summary-amount">
-                          {formatMoney(parsePrice(editingHistoryTotalInput))}
-                        </span>
-                      </li>
-                    ) : (
-                      editingHistoryEntry.orders.map((order) => (
-                        <li key={order.id} className="close-account-summary-item">
-                          <span className="close-account-summary-desc">
-                            {orderDisplayLabel(order)}
-                          </span>
-                          <span className="close-account-summary-amount">
-                            {formatMoney(order.amount)}
-                          </span>
-                        </li>
-                      ))
-                    )}
-                  </ul>
-                </div>
-                <div className="close-account-actions">
+                <div className="close-account-actions edit-history-actions">
                   <button
                     type="submit"
                     className="add-btn close-account-confirm-btn add-btn--primary"
@@ -3772,6 +3927,11 @@ const styles = `
     display: flex;
     align-items: center;
     gap: 0.5rem;
+  }
+
+  .historico-card-title-split {
+    color: #fff;
+    font-weight: 600;
   }
 
   .historico-card-icon {
@@ -4838,6 +4998,16 @@ const styles = `
     color: #fff;
   }
 
+  .close-account-panel-wrap .close-account-method-btn--split {
+    border: 1px dashed var(--accent);
+    color: var(--text-muted);
+    background: #e3f2fd;
+  }
+
+  .close-account-panel-wrap .close-account-method-btn--split:hover {
+    background: #bbdefb;
+  }
+
   .close-account-actions {
     display: flex;
     flex-wrap: wrap;
@@ -4869,6 +5039,66 @@ const styles = `
     border-color: var(--accent);
     color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-muted);
+  }
+
+  .split-payment-panel-wrap .split-payment-panel {
+    max-width: 22rem;
+  }
+
+  .split-payment-total {
+    margin-bottom: 1rem;
+  }
+
+  .split-payment-inputs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+  }
+
+  .split-payment-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .split-payment-label {
+    flex: 0 0 8rem;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+  }
+
+  .split-payment-input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.5rem 0.65rem;
+    font-size: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  .split-payment-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-muted);
+  }
+
+  .split-payment-falta {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.95rem;
+    color: var(--text-muted);
+  }
+
+  .split-payment-falta--ok {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .split-payment-falta--error {
+    color: #c62828;
+    font-weight: 600;
   }
 
   @media (max-width: 640px) {
@@ -5257,6 +5487,35 @@ const styles = `
     font-size: 0.85rem;
     font-weight: 500;
     color: var(--text);
+  }
+
+  .edit-history-panel .add-panel-close,
+  .edit-history-panel .add-title,
+  .edit-history-panel .add-form {
+    flex-shrink: 0;
+  }
+
+  .edit-history-payment {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin: 0 0 0.5rem 0;
+  }
+
+  .edit-history-payment strong {
+    color: var(--text);
+  }
+
+  .edit-history-panel .add-form {
+    padding: 1.25rem 0 0;
+  }
+
+  .edit-history-total-wrap {
+    margin-bottom: 0.25rem;
+  }
+
+  .edit-history-actions {
+    margin-top: 1.25rem;
+    padding-top: 1.25rem;
   }
 
   .add-input,

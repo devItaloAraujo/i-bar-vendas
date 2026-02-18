@@ -37,6 +37,8 @@ export interface HistoryEntryRow {
   paidAt: string
   paymentMethod?: string
   editedAt?: string
+  /** When set, this entry is part of a split payment; card shows this amount instead of sum(orders). */
+  displayAmount?: number
 }
 
 export interface HistoryOrderRow {
@@ -70,6 +72,8 @@ export interface HistoryEntry {
   paidAt: string
   paymentMethod?: string
   editedAt?: string
+  /** When set, card and totals use this value instead of sum(orders). */
+  displayAmount?: number
 }
 
 export interface MenuCategory {
@@ -373,6 +377,7 @@ export async function getHistory(): Promise<HistoryEntry[]> {
       paidAt: row.paidAt,
       paymentMethod: row.paymentMethod,
       editedAt: row.editedAt,
+      displayAmount: row.displayAmount,
       orders: orderRows.map((o) => ({
         id: o.id,
         description: o.description,
@@ -390,14 +395,17 @@ export async function addHistoryEntry(entry: {
   paidAt: string
   paymentMethod?: string
   orders: Order[]
+  displayAmount?: number
 }): Promise<HistoryEntry> {
   const id = crypto.randomUUID()
-  await db.historyEntries.add({
+  const row: HistoryEntryRow = {
     id,
     clientName: entry.clientName,
     paidAt: entry.paidAt,
     paymentMethod: entry.paymentMethod,
-  })
+  }
+  if (entry.displayAmount != null) row.displayAmount = entry.displayAmount
+  await db.historyEntries.add(row)
   for (const o of entry.orders) {
     await db.historyOrders.add({
       id: o.id,
@@ -413,6 +421,7 @@ export async function addHistoryEntry(entry: {
     clientName: entry.clientName,
     paidAt: entry.paidAt,
     paymentMethod: entry.paymentMethod,
+    displayAmount: entry.displayAmount,
     orders: entry.orders,
   }
 }
@@ -423,6 +432,7 @@ export async function updateHistoryEntry(
     clientName?: string
     paidAt?: string
     paymentMethod?: string
+    displayAmount?: number
     orders?: Order[]
   }
 ): Promise<void> {
@@ -432,6 +442,7 @@ export async function updateHistoryEntry(
   if (updates.clientName != null) row.clientName = updates.clientName
   if (updates.paidAt != null) row.paidAt = updates.paidAt
   if (updates.paymentMethod !== undefined) row.paymentMethod = updates.paymentMethod
+  if (updates.displayAmount !== undefined) (row as HistoryEntryRow).displayAmount = updates.displayAmount
   if (updates.orders !== undefined) (row as HistoryEntryRow).editedAt = new Date().toISOString()
 
   await db.historyEntries.put(row)
@@ -464,4 +475,34 @@ export async function closeTableAndAddToHistory(
   })
   await deleteTable(tableId)
   return entry
+}
+
+/** Close table and add one history entry per split; each entry has same orders, clientName "Name (i/n)", displayAmount = split amount. */
+export async function closeTableAndAddSplitToHistory(
+  tableId: string,
+  table: Table,
+  splits: Array<{ paymentMethod: string; amount: number }>
+): Promise<HistoryEntry[]> {
+  const paidAt = new Date().toISOString()
+  const n = splits.length
+  const baseName = table.name
+  const entries: HistoryEntry[] = []
+  for (let i = 0; i < n; i++) {
+    const { paymentMethod, amount } = splits[i]
+    const clientName = n > 1 ? `${baseName}. (${i + 1}/${n})` : baseName
+    const ordersWithNewIds = table.orders.map((o) => ({
+      ...o,
+      id: crypto.randomUUID(),
+    }))
+    const entry = await addHistoryEntry({
+      clientName,
+      paidAt,
+      paymentMethod,
+      orders: ordersWithNewIds,
+      displayAmount: amount,
+    })
+    entries.push(entry)
+  }
+  await deleteTable(tableId)
+  return entries
 }
