@@ -14,6 +14,7 @@ import {
   deleteTableOrder,
   closeTableAndAddToHistory,
   addHistoryEntry,
+  updateHistoryEntry,
   addCategory as dbAddCategory,
   addMenuItem as dbAddMenuItem,
   updateMenuItem as dbUpdateMenuItem,
@@ -154,6 +155,9 @@ export default function App() {
   const [editProductPriceDrink, setEditProductPriceDrink] = useState('')
   const [editProductPriceTakeaway, setEditProductPriceTakeaway] = useState('')
   const [editProductPriceMode, setEditProductPriceMode] = useState<'single' | 'beberLevar'>('single')
+  const [historyEditConfirm, setHistoryEditConfirm] = useState<HistoryEntry | null>(null)
+  const [editingHistoryEntry, setEditingHistoryEntry] = useState<HistoryEntry | null>(null)
+  const [editingHistoryTotalInput, setEditingHistoryTotalInput] = useState('')
   const newTableInputRef = useRef<HTMLInputElement>(null)
   const editingTableNameInputRef = useRef<HTMLInputElement>(null)
   const novoClientePlaceholderRef = useRef<HTMLButtonElement>(null)
@@ -394,6 +398,21 @@ export default function App() {
   const tableTotal = (t: Table) => t.orders.reduce((s, o) => s + o.amount, 0)
   const historyEntryTotal = (e: HistoryEntry) => e.orders.reduce((s, o) => s + o.amount, 0)
 
+  function openHistoryEdit(entry: HistoryEntry) {
+    setEditingHistoryEntry(entry)
+    const total = entry.orders.reduce((s, o) => s + o.amount, 0)
+    setEditingHistoryTotalInput(total === 0 ? '' : formatPrice(total))
+  }
+
+  function closeHistoryEdit() {
+    setEditingHistoryEntry(null)
+    setEditingHistoryTotalInput('')
+  }
+
+  function handleEditingHistoryTotalChange(value: string) {
+    setEditingHistoryTotalInput(value.replace(/[^\d,.]/g, ''))
+  }
+
   function filterHistoryByPeriod(entries: HistoryEntry[], period: RelatorioPeriodo): HistoryEntry[] {
     const now = Date.now()
     const cut24 = now - 24 * 60 * 60 * 1000
@@ -586,6 +605,12 @@ export default function App() {
       } else if (newProductOpen) {
         e.preventDefault()
         setNewProductOpen(false)
+      } else if (historyEditConfirm) {
+        e.preventDefault()
+        setHistoryEditConfirm(null)
+      } else if (editingHistoryEntry) {
+        e.preventDefault()
+        closeHistoryEdit()
       } else if (addOpen) {
         e.preventDefault()
         setAddOpen(false)
@@ -596,7 +621,7 @@ export default function App() {
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, editProductModal, newCategoryOpen, newProductOpen])
+  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, editProductModal, newCategoryOpen, newProductOpen, historyEditConfirm, editingHistoryEntry])
 
   useEffect(() => {
     const anyModalOpen =
@@ -609,14 +634,16 @@ export default function App() {
       relatorioModalOpen ||
       newCategoryOpen ||
       newProductOpen ||
-      !!editProductModal
+      !!editProductModal ||
+      !!historyEditConfirm ||
+      !!editingHistoryEntry
     if (!anyModalOpen) return
     const prev = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     return () => {
       document.body.style.overflow = prev
     }
-  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, relatorioModalOpen, newCategoryOpen, newProductOpen, editProductModal])
+  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, relatorioModalOpen, newCategoryOpen, newProductOpen, editProductModal, historyEditConfirm, editingHistoryEntry])
 
   useEffect(() => {
     if (!newTableOpen) return
@@ -1069,12 +1096,27 @@ export default function App() {
                           <MdReceipt size={20} className="historico-card-icon" aria-hidden />
                           {entry.clientName}
                         </h2>
-                        <span className="historico-card-total">{formatMoney(historyEntryTotal(entry))}</span>
+                        <div className="historico-card-header-right">
+                          <span className="historico-card-total">
+                            {formatMoney(historyEntryTotal(entry))}
+                          </span>
+                          <button
+                            type="button"
+                            className="historico-card-edit-btn"
+                            onClick={() => setHistoryEditConfirm(entry)}
+                            aria-label={`Editar valores da venda de ${entry.clientName}`}
+                          >
+                            <MdEdit size={18} aria-hidden />
+                          </button>
+                        </div>
                       </div>
                       <p className="historico-card-date">
                         {formatDate(entry.paidAt)}
                         {entry.paymentMethod != null && entry.paymentMethod !== '' && (
                           <span className="historico-card-payment"> · {entry.paymentMethod}</span>
+                        )}
+                        {entry.editedAt != null && (
+                          <span className="historico-card-edited"> · Editado</span>
                         )}
                       </p>
                       <ul className="historico-orders">
@@ -2459,6 +2501,222 @@ export default function App() {
         </>
       )}
 
+      {/* Confirmar edição de venda do histórico */}
+      {historyEditConfirm && (
+        <>
+          <div
+            className="confirm-overlay"
+            onClick={() => setHistoryEditConfirm(null)}
+            aria-hidden
+          />
+          <div
+            className="confirm-panel-wrap"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="confirm-history-edit-title"
+            aria-describedby="confirm-history-edit-desc"
+          >
+            <div className="confirm-panel" onClick={(e) => e.stopPropagation()}>
+              <h2 id="confirm-history-edit-title" className="confirm-title">
+                Editar venda
+              </h2>
+              <p id="confirm-history-edit-desc" className="confirm-desc">
+                Confirmar edição da venda de <strong>"{historyEditConfirm.clientName}"</strong>?
+              </p>
+              <p className="confirm-desc">
+                Data: <strong>{formatDate(historyEditConfirm.paidAt)}</strong>
+                {historyEditConfirm.paymentMethod && (
+                  <>
+                    {' · '}Método:{' '}
+                    <strong>{historyEditConfirm.paymentMethod}</strong>
+                  </>
+                )}
+              </p>
+              <p className="confirm-desc">
+                Total atual:{' '}
+                <strong>{formatMoney(historyEntryTotal(historyEditConfirm))}</strong>
+              </p>
+              <div className="confirm-actions">
+                <button
+                  type="button"
+                  className="add-btn confirm-btn-cancel"
+                  onClick={() => setHistoryEditConfirm(null)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="add-btn confirm-btn-remove"
+                  onClick={() => {
+                    const entry = historyEditConfirm
+                    setHistoryEditConfirm(null)
+                    if (entry) openHistoryEdit(entry)
+                  }}
+                >
+                  Editar
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Edição de valores de venda do histórico */}
+      {editingHistoryEntry && (
+        <>
+          <div
+            className="add-overlay add-overlay--open"
+            onClick={closeHistoryEdit}
+            aria-hidden
+          />
+          <div
+            className="add-panel-wrap add-panel-wrap--open"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-history-title"
+          >
+            <div className="add-panel add-panel--product-form" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                className="add-panel-close"
+                onClick={closeHistoryEdit}
+                aria-label="Fechar"
+              >
+                <MdClose size={20} aria-hidden />
+              </button>
+              <h2 id="edit-history-title" className="add-title add-title--client">
+                <MdEdit size={20} aria-hidden />
+                Editar venda — {editingHistoryEntry.clientName}
+              </h2>
+              <p className="add-desc">
+                Ajuste o total da venda. Em vendas rápidas, o valor do item acompanha o total. Nos demais casos, se o total for diferente da soma dos itens, será criado um item &quot;Ajuste&quot;.
+              </p>
+              <form
+                className="add-form"
+                onSubmit={async (e) => {
+                  e.preventDefault()
+                  if (!editingHistoryEntry) return
+                  const totalFromInput = Math.round(parsePrice(editingHistoryTotalInput) * 100) / 100
+                  const isVendaRapida =
+                    editingHistoryEntry.clientName === 'venda rapida' &&
+                    editingHistoryEntry.orders.length === 1 &&
+                    editingHistoryEntry.orders[0].description === 'Venda rápida'
+                  let finalOrders: Order[]
+                  if (isVendaRapida) {
+                    const single = editingHistoryEntry.orders[0]
+                    finalOrders = [
+                      {
+                        ...single,
+                        amount: totalFromInput,
+                        quantity: 1,
+                      },
+                    ]
+                  } else {
+                    finalOrders = [...editingHistoryEntry.orders]
+                    const sumItems = finalOrders.reduce((s, o) => s + o.amount, 0)
+                    const diff = Math.round((totalFromInput - sumItems) * 100) / 100
+                    if (Math.abs(diff) >= 0.01) {
+                      finalOrders = [
+                        ...finalOrders,
+                        {
+                          id: crypto.randomUUID(),
+                          description: 'Ajuste',
+                          amount: diff,
+                          date: finalOrders[0]?.date ?? todayISO(),
+                          quantity: 1,
+                        } as Order,
+                      ]
+                    }
+                  }
+                  await updateHistoryEntry(editingHistoryEntry.id, { orders: finalOrders })
+                  const editedAt = new Date().toISOString()
+                  setHistory((prev) =>
+                    prev.map((e) =>
+                      e.id === editingHistoryEntry.id
+                        ? { ...e, orders: finalOrders, editedAt }
+                        : e
+                    )
+                  )
+                  setToasts((prev) => [
+                    ...prev,
+                    {
+                      id: crypto.randomUUID(),
+                      message: 'Venda atualizada',
+                      type: 'success',
+                    },
+                  ])
+                  closeHistoryEdit()
+                }}
+              >
+                <div className="edit-history-total-wrap">
+                  <label className="add-label">Total da venda (R$)</label>
+                  <div className="edit-order-price-wrap edit-history-total-input-wrap">
+                    <span className="edit-order-currency">R$</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="0,00"
+                      className="add-input edit-order-price-input"
+                      value={editingHistoryTotalInput}
+                      onChange={(e) => handleEditingHistoryTotalChange(e.target.value)}
+                    />
+                  </div>
+                  <p className="edit-order-total-line" aria-live="polite">
+                    O valor dessa venda será ajustado para:{' '}
+                    <strong>
+                      {editingHistoryTotalInput.trim()
+                        ? formatMoney(parsePrice(editingHistoryTotalInput))
+                        : '—'}
+                    </strong>
+                  </p>
+                </div>
+                <p className="add-label edit-history-items-label">Itens da venda</p>
+                <div className="close-account-summary-scroll">
+                  <ul className="close-account-summary">
+                    {editingHistoryEntry.clientName === 'venda rapida' &&
+                    editingHistoryEntry.orders.length === 1 ? (
+                      <li className="close-account-summary-item">
+                        <span className="close-account-summary-desc">Venda rápida</span>
+                        <span className="close-account-summary-amount">
+                          {formatMoney(parsePrice(editingHistoryTotalInput))}
+                        </span>
+                      </li>
+                    ) : (
+                      editingHistoryEntry.orders.map((order) => (
+                        <li key={order.id} className="close-account-summary-item">
+                          <span className="close-account-summary-desc">
+                            {orderDisplayLabel(order)}
+                          </span>
+                          <span className="close-account-summary-amount">
+                            {formatMoney(order.amount)}
+                          </span>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                </div>
+                <div className="close-account-actions">
+                  <button
+                    type="submit"
+                    className="add-btn close-account-confirm-btn add-btn--primary"
+                    disabled={parsePrice(editingHistoryTotalInput) <= 0}
+                  >
+                    Salvar alterações
+                  </button>
+                  <button
+                    type="button"
+                    className="add-btn close-account-cancel-btn"
+                    onClick={closeHistoryEdit}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </>
+      )}
+
       {toasts.length > 0 && (
         <div className="toast-stack" aria-live="polite" aria-atomic="false">
           {[...toasts].reverse().map((t) => (
@@ -3417,6 +3675,35 @@ const styles = `
     font-size: 0.95rem;
     font-weight: 700;
     color: #4a4d52;
+  }
+
+  .historico-card-header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .historico-card-edit-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.4rem;
+    border: none;
+    border-radius: 8px;
+    background: #a8adb4;
+    color: #4a4d52;
+    cursor: pointer;
+    transition: filter 0.2s ease, color 0.2s ease;
+  }
+
+  .historico-card-edit-btn:hover {
+    filter: brightness(0.95);
+    color: var(--text);
+  }
+
+  .historico-card-edit-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent-muted);
   }
 
   .historico-card-date {
@@ -4526,6 +4813,11 @@ const styles = `
   .historico-card-payment {
     color: var(--accent);
     font-weight: 500;
+  }
+
+  .historico-card-edited {
+    color: var(--text-muted);
+    font-style: italic;
   }
 
   .historico-total-by-method {

@@ -36,6 +36,7 @@ export interface HistoryEntryRow {
   clientName: string
   paidAt: string
   paymentMethod?: string
+  editedAt?: string
 }
 
 export interface HistoryOrderRow {
@@ -68,6 +69,7 @@ export interface HistoryEntry {
   orders: Order[]
   paidAt: string
   paymentMethod?: string
+  editedAt?: string
 }
 
 export interface MenuCategory {
@@ -364,11 +366,13 @@ export async function getHistory(): Promise<HistoryEntry[]> {
   const result: HistoryEntry[] = []
   for (const e of entries) {
     const orderRows = await db.historyOrders.where('historyId').equals(e.id).toArray()
+    const row = e as HistoryEntryRow
     result.push({
-      id: e.id,
-      clientName: e.clientName,
-      paidAt: e.paidAt,
-      paymentMethod: e.paymentMethod,
+      id: row.id,
+      clientName: row.clientName,
+      paidAt: row.paidAt,
+      paymentMethod: row.paymentMethod,
+      editedAt: row.editedAt,
       orders: orderRows.map((o) => ({
         id: o.id,
         description: o.description,
@@ -410,6 +414,40 @@ export async function addHistoryEntry(entry: {
     paidAt: entry.paidAt,
     paymentMethod: entry.paymentMethod,
     orders: entry.orders,
+  }
+}
+
+export async function updateHistoryEntry(
+  historyId: string,
+  updates: {
+    clientName?: string
+    paidAt?: string
+    paymentMethod?: string
+    orders?: Order[]
+  }
+): Promise<void> {
+  const row = await db.historyEntries.get(historyId)
+  if (!row) return
+
+  if (updates.clientName != null) row.clientName = updates.clientName
+  if (updates.paidAt != null) row.paidAt = updates.paidAt
+  if (updates.paymentMethod !== undefined) row.paymentMethod = updates.paymentMethod
+  if (updates.orders !== undefined) (row as HistoryEntryRow).editedAt = new Date().toISOString()
+
+  await db.historyEntries.put(row)
+
+  if (updates.orders) {
+    await db.historyOrders.where('historyId').equals(historyId).delete()
+    for (const o of updates.orders) {
+      await db.historyOrders.add({
+        id: o.id,
+        historyId,
+        description: o.description,
+        amount: o.amount,
+        date: o.date,
+        quantity: o.quantity ?? 1,
+      })
+    }
   }
 }
 
