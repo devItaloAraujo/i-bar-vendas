@@ -3292,7 +3292,7 @@ const styles = `
   }
 
   .table-card-header-close:hover {
-    background: rgba(0, 0, 0, 0.08);
+    background: rgba(220, 53, 69, 0.2);
     color: var(--text);
     transform: translateY(-1px);
   }
