@@ -135,6 +135,8 @@ export default function App() {
   const [quickSaleTotal, setQuickSaleTotal] = useState('')
   const [quickSalePaymentMethod, setQuickSalePaymentMethod] = useState<string | null>(null)
   const [quickSaleExiting, setQuickSaleExiting] = useState(false)
+  const [quickSaleSplitOpen, setQuickSaleSplitOpen] = useState(false)
+  const [quickSaleSplitAmounts, setQuickSaleSplitAmounts] = useState<Record<string, string>>({})
   const [relatorioModalOpen, setRelatorioModalOpen] = useState(false)
   const [relatorioTipo, setRelatorioTipo] = useState<'completo' | 'credito' | 'anotado' | null>('completo')
   const [relatorioPeriodo, setRelatorioPeriodo] = useState<RelatorioPeriodo>('24h')
@@ -160,6 +162,7 @@ export default function App() {
   const [editProductPriceTakeaway, setEditProductPriceTakeaway] = useState('')
   const [editProductPriceMode, setEditProductPriceMode] = useState<'single' | 'beberLevar'>('single')
   const [historyEditConfirm, setHistoryEditConfirm] = useState<HistoryEntry | null>(null)
+  const [splitEditChoiceEntries, setSplitEditChoiceEntries] = useState<HistoryEntry[] | null>(null)
   const [editingHistoryEntry, setEditingHistoryEntry] = useState<HistoryEntry | null>(null)
   const [editingHistoryTotalInput, setEditingHistoryTotalInput] = useState('')
   const [removeTableConfirm, setRemoveTableConfirm] = useState<{ tableId: string; tableName: string } | null>(null)
@@ -176,6 +179,21 @@ export default function App() {
   const today = todayISO()
   const historyEntryTotal = (e: HistoryEntry) =>
     e.displayAmount != null ? e.displayAmount : e.orders.reduce((s, o) => s + o.amount, 0)
+
+  /** If entry is part of a split (clientName "X. (i/n)" with n > 1), return group key and parsed parts; else null. */
+  function getSplitGroupKey(entry: HistoryEntry): { groupKey: string; baseName: string; index: number; n: number } | null {
+    const m = entry.clientName.match(/^(.+?)\s*\.?\s*\((\d+)\/(\d+)\)\s*$/)
+    if (!m) return null
+    const n = parseInt(m[3], 10)
+    if (n <= 1) return null
+    return {
+      groupKey: `${m[1].trimEnd()}\t${entry.paidAt}\t${n}`,
+      baseName: m[1].trimEnd(),
+      index: parseInt(m[2], 10),
+      n,
+    }
+  }
+
   const dailyTotal = history
     .filter((entry) => isSameLocalDay(entry.paidAt, today))
     .reduce((sum, entry) => sum + historyEntryTotal(entry), 0)
@@ -609,6 +627,9 @@ export default function App() {
       } else if (newProductOpen) {
         e.preventDefault()
         setNewProductOpen(false)
+      } else if (splitEditChoiceEntries) {
+        e.preventDefault()
+        setSplitEditChoiceEntries(null)
       } else if (historyEditConfirm) {
         e.preventDefault()
         setHistoryEditConfirm(null)
@@ -622,6 +643,10 @@ export default function App() {
         e.preventDefault()
         setSplitPaymentModalTable(null)
         setSplitAmounts({})
+      } else if (quickSaleSplitOpen) {
+        e.preventDefault()
+        setQuickSaleSplitOpen(false)
+        setQuickSaleSplitAmounts({})
       } else if (addOpen) {
         e.preventDefault()
         setAddOpen(false)
@@ -632,7 +657,7 @@ export default function App() {
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, splitPaymentModalTable, editProductModal, newCategoryOpen, newProductOpen, historyEditConfirm, editingHistoryEntry])
+  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, splitPaymentModalTable, quickSaleSplitOpen, editProductModal, newCategoryOpen, newProductOpen, splitEditChoiceEntries, historyEditConfirm, editingHistoryEntry])
 
   useEffect(() => {
     const anyModalOpen =
@@ -643,11 +668,13 @@ export default function App() {
       !!removeProductConfirm ||
       !!closeAccountModal ||
       !!splitPaymentModalTable ||
+      quickSaleSplitOpen ||
       relatorioModalOpen ||
       newCategoryOpen ||
       newProductOpen ||
       !!editProductModal ||
       !!removeTableConfirm ||
+      !!splitEditChoiceEntries ||
       !!historyEditConfirm ||
       !!editingHistoryEntry
     if (!anyModalOpen) return
@@ -656,7 +683,7 @@ export default function App() {
     return () => {
       document.body.style.overflow = prev
     }
-  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, splitPaymentModalTable, relatorioModalOpen, newCategoryOpen, newProductOpen, editProductModal, removeTableConfirm, historyEditConfirm, editingHistoryEntry])
+  }, [addOpen, newTableOpen, editOrderModal, removeConfirm, removeProductConfirm, closeAccountModal, splitPaymentModalTable, quickSaleSplitOpen, relatorioModalOpen, newCategoryOpen, newProductOpen, editProductModal, removeTableConfirm, splitEditChoiceEntries, historyEditConfirm, editingHistoryEntry])
 
   useEffect(() => {
     if (!newTableOpen) return
@@ -1056,6 +1083,17 @@ export default function App() {
                       {method}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    className="add-btn close-account-method-btn close-account-method-btn--split"
+                    disabled={Math.round(parsePrice(quickSaleTotal) * 100) / 100 <= 0}
+                    onClick={() => {
+                      setQuickSaleSplitAmounts({})
+                      setQuickSaleSplitOpen(true)
+                    }}
+                  >
+                    {MULTIPLE_PAYMENTS_LABEL}
+                  </button>
                 </div>
                 <button
                   type="button"
@@ -1071,13 +1109,52 @@ export default function App() {
         )}
 
         {activeTab === 'historico' && (() => {
-          const filteredHistory = historicoPaymentFilter === null
-            ? history
-            : history.filter((e) => (e.paymentMethod ?? '') === historicoPaymentFilter)
-          const filteredTotalByMethod = filteredHistory.reduce((s, e) => s + historyEntryTotal(e), 0)
-          const showTotalByMethod = historicoPaymentFilter !== null && filteredHistory.length > 0
+          type DisplayItem = { type: 'single'; entry: HistoryEntry } | { type: 'group'; baseName: string; paidAt: string; entries: HistoryEntry[] }
+          const groupMap = new Map<string, HistoryEntry[]>()
+          for (const e of history) {
+            const sk = getSplitGroupKey(e)
+            if (sk && sk.n > 1) {
+              const list = groupMap.get(sk.groupKey) ?? []
+              list.push(e)
+              groupMap.set(sk.groupKey, list)
+            }
+          }
+          for (const list of groupMap.values()) {
+            list.sort((a, b) => (getSplitGroupKey(a)!.index - getSplitGroupKey(b)!.index))
+          }
+          const seenGroups = new Set<string>()
+          const orderedItems: DisplayItem[] = []
+          for (const entry of history) {
+            const sk = getSplitGroupKey(entry)
+            if (sk && sk.n > 1) {
+              if (seenGroups.has(sk.groupKey)) continue
+              seenGroups.add(sk.groupKey)
+              orderedItems.push({ type: 'group', baseName: sk.baseName, paidAt: entry.paidAt, entries: groupMap.get(sk.groupKey)! })
+            } else {
+              orderedItems.push({ type: 'single', entry })
+            }
+          }
+          const filteredItems =
+            historicoPaymentFilter === null
+              ? orderedItems
+              : orderedItems.filter((item) =>
+                  item.type === 'single'
+                    ? (item.entry.paymentMethod ?? '') === historicoPaymentFilter
+                    : item.entries.some((e) => (e.paymentMethod ?? '') === historicoPaymentFilter)
+                )
+          const todayHist = todayISO()
+          const filteredTotalByMethodToday = filteredItems.reduce((s, item) => {
+            if (item.type === 'single') {
+              if (!isSameLocalDay(item.entry.paidAt, todayHist)) return s
+              return s + historyEntryTotal(item.entry)
+            }
+            return s + item.entries
+              .filter((e) => (e.paymentMethod ?? '') === historicoPaymentFilter && isSameLocalDay(e.paidAt, todayHist))
+              .reduce((sum, e) => sum + historyEntryTotal(e), 0)
+          }, 0)
+          const showTotalByMethod = historicoPaymentFilter !== null && filteredItems.length > 0
           return (
-            <section className={`historico ${showTotalByMethod ? 'historico--has-total' : ''}`} id="panel-historico" role="tabpanel" aria-labelledby="tab-historico">
+            <section className="historico" id="panel-historico" role="tabpanel" aria-labelledby="tab-historico">
               <div className="historico-header-row">
                 <div className="historico-filters">
                   <button
@@ -1098,92 +1175,171 @@ export default function App() {
                     </button>
                   ))}
                 </div>
-                <button
-                  type="button"
-                  className="historico-pdf-btn"
-                  onClick={() => { setRelatorioTipo('completo'); setRelatorioPeriodo('24h'); setRelatorioModalOpen(true) }}
-                  disabled={history.length === 0}
-                  aria-label="Imprimir relatório"
-                >
-                  <MdPictureAsPdf size={20} aria-hidden />
-                  Imprimir relatório
-                </button>
+                <div className="historico-header-right">
+                  {showTotalByMethod && (
+                    <div className="historico-total-by-method" aria-live="polite">
+                      <span className="historico-total-by-method-label">Total em {historicoPaymentFilter} hoje</span>
+                      <span className="historico-total-by-method-value">{formatMoney(filteredTotalByMethodToday)}</span>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="historico-pdf-btn"
+                    onClick={() => { setRelatorioTipo('completo'); setRelatorioPeriodo('24h'); setRelatorioModalOpen(true) }}
+                    disabled={history.length === 0}
+                    aria-label="Imprimir relatório"
+                  >
+                    <MdPictureAsPdf size={20} aria-hidden />
+                    Imprimir relatório
+                  </button>
+                </div>
               </div>
               <div className="historico-list">
                 {history.length === 0 ? (
                   <p className="historico-empty">Nenhuma venda consolidada ainda.</p>
-                ) : filteredHistory.length === 0 ? (
+                ) : filteredItems.length === 0 ? (
                   <p className="historico-empty">Nenhuma venda com este método de pagamento.</p>
                 ) : (
-                  filteredHistory.map((entry) => (
-                    <article key={entry.id} className="historico-card">
-                      <div className="historico-card-header">
-                        <h2 className="historico-card-title">
-                          <MdReceipt size={20} className="historico-card-icon" aria-hidden />
-                          {(() => {
-                            const m = entry.clientName.match(/^(.+?)\s*\.?\s*\((\d+)\/(\d+)\)\s*$/)
-                            if (m) {
-                              return (
-                                <>
-                                  {m[1].trimEnd()}
-                                  <span className="historico-card-title-split"> · ({m[2]}/{m[3]})</span>
-                                </>
-                              )
-                            }
-                            return entry.clientName
-                          })()}
-                        </h2>
-                        <div className="historico-card-header-right">
-                          <span className="historico-card-total">
-                            {formatMoney(historyEntryTotal(entry))}
-                          </span>
-                          <button
-                            type="button"
-                            className="historico-card-edit-btn"
-                            onClick={() => setHistoryEditConfirm(entry)}
-                            aria-label={`Editar valores da venda de ${entry.clientName}`}
-                          >
-                            <MdEdit size={18} aria-hidden />
-                          </button>
-                        </div>
-                      </div>
-                      <p className="historico-card-date">
-                        {formatDate(entry.paidAt)}
-                        {entry.paymentMethod != null && entry.paymentMethod !== '' && (
-                          <span className="historico-card-payment"> · {entry.paymentMethod}</span>
-                        )}
-                        {entry.editedAt != null && (
-                          <span className="historico-card-edited"> · Editado</span>
-                        )}
-                      </p>
-                      <ul className="historico-orders">
-                        {entry.orders.map((order) => (
-                          <li key={order.id} className="historico-order">
-                            <span className="historico-order-desc">
-                              {(() => {
-                                const { baseDescription, quantity } = parseOrderForEdit(order.description, order.quantity)
-                                return (
-                                  <>
-                                    {baseDescription}
-                                    {quantity > 1 && <span className="historico-order-qty"> x{quantity}</span>}
-                                  </>
-                                )
-                              })()}
+                  filteredItems.map((item) => {
+                    if (item.type === 'single') {
+                      const entry = item.entry
+                      return (
+                        <article key={entry.id} className="historico-card">
+                          <div className="historico-card-header">
+                            <h2 className="historico-card-title">
+                              <MdReceipt size={20} className="historico-card-icon" aria-hidden />
+                              {entry.clientName}
+                            </h2>
+                            <div className="historico-card-header-right">
+                              <span className="historico-card-total">
+                                {formatMoney(historyEntryTotal(entry))}
+                              </span>
+                              <button
+                                type="button"
+                                className="historico-card-edit-btn"
+                                onClick={() => setHistoryEditConfirm(entry)}
+                                aria-label={`Editar valores da venda de ${entry.clientName}`}
+                              >
+                                <MdEdit size={18} aria-hidden />
+                              </button>
+                            </div>
+                          </div>
+                          <p className="historico-card-date">
+                            {formatDate(entry.paidAt)}
+                            {entry.paymentMethod != null && entry.paymentMethod !== '' && (
+                              <span className="historico-card-payment"> · {entry.paymentMethod}</span>
+                            )}
+                            {entry.editedAt != null && (
+                              <span className="historico-card-edited"> · Editado</span>
+                            )}
+                          </p>
+                          <ul className="historico-orders">
+                            {entry.orders.map((order) => (
+                              <li key={order.id} className="historico-order">
+                                <span className="historico-order-desc">
+                                  {(() => {
+                                    const { baseDescription, quantity } = parseOrderForEdit(order.description, order.quantity)
+                                    return (
+                                      <>
+                                        {baseDescription}
+                                        {quantity > 1 && <span className="historico-order-qty"> x{quantity}</span>}
+                                      </>
+                                    )
+                                  })()}
+                                </span>
+                                <span className="historico-order-amount">{formatMoney(order.amount)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </article>
+                      )
+                    }
+                    const { baseName, paidAt, entries } = item
+                    const groupTotal = entries.reduce((sum, e) => sum + historyEntryTotal(e), 0)
+                    const first = entries[0]
+                    const isAjuste = (o: Order) => o.description === 'Ajuste'
+                    const mainOrders = (entry: HistoryEntry) => entry.orders.filter((o) => !isAjuste(o))
+                    const allAjustes = entries.flatMap((e) => e.orders.filter(isAjuste))
+                    const firstMain = mainOrders(first)
+                    const allSameSingleOrder =
+                      firstMain.length === 1 &&
+                      entries.every((e) => {
+                        const main = mainOrders(e)
+                        return main.length === 1 && main[0].description === firstMain[0].description
+                      })
+                    const baseItems: Order[] = allSameSingleOrder
+                      ? [{ id: firstMain[0].id, description: firstMain[0].description, amount: groupTotal - allAjustes.reduce((s, o) => s + o.amount, 0), date: firstMain[0].date, quantity: 1 }]
+                      : firstMain.length > 0 ? firstMain : first.orders
+                    const displayOrders: Order[] = [...baseItems, ...allAjustes]
+                    const anyEdited = entries.some((e) => e.editedAt != null)
+                    return (
+                      <article key={`group-${first.id}`} className="historico-card historico-card--split">
+                        <div className="historico-card-header">
+                          <h2 className="historico-card-title">
+                            <MdReceipt size={20} className="historico-card-icon" aria-hidden />
+                            {baseName}
+                          </h2>
+                          <div className="historico-card-header-right">
+                            <span className="historico-card-total">
+                              {formatMoney(groupTotal)}
                             </span>
-                            <span className="historico-order-amount">{formatMoney(order.amount)}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </article>
-                  ))
+                            <button
+                              type="button"
+                              className="historico-card-edit-btn"
+                              onClick={() => setSplitEditChoiceEntries(entries)}
+                              aria-label={`Editar valores da venda de ${baseName}`}
+                            >
+                              <MdEdit size={18} aria-hidden />
+                            </button>
+                          </div>
+                        </div>
+                        <p className="historico-card-date">
+                          {formatDate(paidAt)}
+                          {anyEdited && (
+                            <span className="historico-card-edited"> · Editado</span>
+                          )}
+                        </p>
+                        <ul className="historico-orders">
+                          {displayOrders.map((order) => (
+                            <li key={order.id} className="historico-order">
+                              <span className="historico-order-desc">
+                                {(() => {
+                                  const { baseDescription, quantity } = parseOrderForEdit(order.description, order.quantity)
+                                  return (
+                                    <>
+                                      {baseDescription}
+                                      {quantity > 1 && <span className="historico-order-qty"> x{quantity}</span>}
+                                    </>
+                                  )
+                                })()}
+                              </span>
+                              <span className="historico-order-amount">{formatMoney(order.amount)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="historico-card-split-table-wrap">
+                          <table className="historico-card-split-table" role="table">
+                            <thead>
+                              <tr>
+                                <th scope="col">Método de pagamento</th>
+                                <th scope="col">Valor</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {entries.map((e) => (
+                                <tr key={e.id}>
+                                  <td>{e.paymentMethod ?? '—'}</td>
+                                  <td>{formatMoney(historyEntryTotal(e))}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </article>
+                    )
+                  })
                 )}
               </div>
-              {showTotalByMethod && (
-                <div className="historico-total-by-method" aria-live="polite">
-                  <span className="historico-total-by-method-label">Total em {historicoPaymentFilter}</span>
-                  <span className="historico-total-by-method-value">{formatMoney(filteredTotalByMethod)}</span>
-                </div>
-              )}
             </section>
           )
         })()}
@@ -2635,6 +2791,160 @@ export default function App() {
         </>
       )}
 
+      {/* Venda rápida — Múltiplas formas */}
+      {quickSaleSplitOpen && (() => {
+        const total = Math.round(parsePrice(quickSaleTotal) * 100) / 100
+        return (
+          <>
+            <div
+              className="add-overlay close-account-overlay close-account-overlay--open"
+              onClick={() => { setQuickSaleSplitOpen(false); setQuickSaleSplitAmounts({}) }}
+              aria-hidden
+            />
+            <div
+              className="add-panel-wrap close-account-panel-wrap close-account-panel-wrap--open split-payment-panel-wrap"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="quick-sale-split-title"
+            >
+              <div className="add-panel close-account-panel split-payment-panel" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  className="add-panel-close"
+                  onClick={() => { setQuickSaleSplitOpen(false); setQuickSaleSplitAmounts({}) }}
+                  aria-label="Fechar"
+                >
+                  <MdClose size={20} aria-hidden />
+                </button>
+                <h2 id="quick-sale-split-title" className="add-title add-title--client">
+                  <MdFlashOn size={20} aria-hidden />
+                  Venda rápida — Múltiplas formas
+                </h2>
+                <p className="close-account-total split-payment-total">
+                  Total: <strong>{formatMoney(total)}</strong>
+                </p>
+                <div className="split-payment-inputs">
+                  {PAYMENT_METHODS.map((method) => (
+                    <div key={method} className="split-payment-row">
+                      <label className="split-payment-label" htmlFor={`quick-split-${method}`}>
+                        {method}
+                      </label>
+                      <input
+                        id={`quick-split-${method}`}
+                        type="text"
+                        inputMode="decimal"
+                        className="split-payment-input"
+                        placeholder="0,00"
+                        value={quickSaleSplitAmounts[method] ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value.replace(/[^\d,.]/g, '')
+                          setQuickSaleSplitAmounts((prev) => ({ ...prev, [method]: v }))
+                        }}
+                        onBlur={() => {
+                          const raw = quickSaleSplitAmounts[method] ?? ''
+                          const n = Math.round(parsePrice(raw) * 100) / 100
+                          if (!n) {
+                            setQuickSaleSplitAmounts((prev) => {
+                              const { [method]: _omit, ...rest } = prev
+                              return rest
+                            })
+                          } else {
+                            setQuickSaleSplitAmounts((prev) => ({
+                              ...prev,
+                              [method]: formatPrice(n),
+                            }))
+                          }
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+                {(() => {
+                  const sum = PAYMENT_METHODS.reduce(
+                    (s, m) => s + (parsePrice(quickSaleSplitAmounts[m] ?? '') || 0),
+                    0
+                  )
+                  const diff = Math.round((sum - total) * 100) / 100
+                  const isExact = Math.abs(diff) < 0.01
+                  const statusClass = isExact
+                    ? 'split-payment-falta--ok'
+                    : Math.sign(diff) === -1
+                      ? 'split-payment-falta--error'
+                      : 'split-payment-falta--error'
+                  const faltaAbs = Math.abs(Math.round((total - sum) * 100) / 100)
+                  return (
+                    <>
+                      <p className={`split-payment-falta ${statusClass}`}>
+                        {isExact
+                          ? 'Total correto.'
+                          : diff < 0
+                            ? `Falta: ${formatMoney(faltaAbs)}`
+                            : `Excedeu: ${formatMoney(faltaAbs)}`}
+                      </p>
+                      <div className="close-account-actions">
+                        <button
+                          type="button"
+                          className="add-btn close-account-confirm-btn add-btn--primary"
+                          disabled={!isExact}
+                          onClick={async () => {
+                            if (!isExact) return
+                            const splits = PAYMENT_METHODS.filter((m) => parsePrice(quickSaleSplitAmounts[m] ?? '') > 0).map(
+                              (m) => ({ paymentMethod: m, amount: parsePrice(quickSaleSplitAmounts[m] ?? '') })
+                            )
+                            if (splits.length === 0) return
+                            const paidAt = new Date().toISOString()
+                            const n = splits.length
+                            const newEntries: HistoryEntry[] = []
+                            for (let i = 0; i < n; i++) {
+                              const { paymentMethod, amount } = splits[i]
+                              const clientName = n > 1 ? `venda rapida. (${i + 1}/${n})` : 'venda rapida'
+                              const order: Order = {
+                                id: crypto.randomUUID(),
+                                description: 'Venda rápida',
+                                amount,
+                                date: todayISO(),
+                                quantity: 1,
+                              }
+                              const entry = await addHistoryEntry({
+                                clientName,
+                                paidAt,
+                                paymentMethod,
+                                orders: [order],
+                                displayAmount: amount,
+                              })
+                              newEntries.push(entry)
+                            }
+                            setHistory((prev) => [...newEntries, ...prev])
+                            setQuickSaleTotal('')
+                            setQuickSalePaymentMethod(null)
+                            setQuickSaleSplitOpen(false)
+                            setQuickSaleSplitAmounts({})
+                            setToasts((prev) => [
+                              ...prev,
+                              { id: crypto.randomUUID(), message: 'Venda rápida registrada!', type: 'success' },
+                            ])
+                            setTotalJustUpdated(true)
+                          }}
+                        >
+                          Confirmar pagamento
+                        </button>
+                        <button
+                          type="button"
+                          className="add-btn close-account-cancel-btn"
+                          onClick={() => { setQuickSaleSplitOpen(false); setQuickSaleSplitAmounts({}) }}
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+            </div>
+          </>
+        )
+      })()}
+
       {/* Relatório PDF — tipo de relatório e período */}
       {relatorioModalOpen && (
         <>
@@ -2746,6 +3056,64 @@ export default function App() {
         </>
       )}
 
+      {/* Escolher qual parte do split editar (só para cards de split) */}
+      {splitEditChoiceEntries && splitEditChoiceEntries.length > 0 && (() => {
+        const baseName = getSplitGroupKey(splitEditChoiceEntries[0])?.baseName ?? splitEditChoiceEntries[0].clientName
+        return (
+          <>
+            <div
+              className="confirm-overlay"
+              onClick={() => setSplitEditChoiceEntries(null)}
+              aria-hidden
+            />
+            <div
+              className="confirm-panel-wrap split-edit-choice-panel-wrap"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="split-edit-choice-title"
+              aria-describedby="split-edit-choice-desc"
+            >
+              <div className="confirm-panel split-edit-choice-panel" onClick={(e) => e.stopPropagation()}>
+                <h2 id="split-edit-choice-title" className="confirm-title">
+                  Editar venda — {baseName}
+                </h2>
+                <p id="split-edit-choice-desc" className="confirm-desc split-edit-choice-desc">
+                  Escolha qual parte editar:
+                </p>
+                <div className="split-edit-choice-list">
+                  {splitEditChoiceEntries.map((entry) => {
+                    const sk = getSplitGroupKey(entry)
+                    const label = sk ? `(${sk.index}/${sk.n}) ${entry.paymentMethod ?? '—'} — ${formatMoney(historyEntryTotal(entry))}` : entry.clientName
+                    return (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        className="split-edit-choice-btn"
+                        onClick={() => {
+                          setHistoryEditConfirm(entry)
+                          setSplitEditChoiceEntries(null)
+                        }}
+                      >
+                        {label}
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="confirm-actions">
+                  <button
+                    type="button"
+                    className="add-btn confirm-btn-cancel"
+                    onClick={() => setSplitEditChoiceEntries(null)}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )
+      })()}
+
       {/* Confirmar edição de venda do histórico */}
       {historyEditConfirm && (
         <>
@@ -2844,43 +3212,20 @@ export default function App() {
                   e.preventDefault()
                   if (!editingHistoryEntry) return
                   const totalFromInput = Math.round(parsePrice(editingHistoryTotalInput) * 100) / 100
-                  const isSplitCard = editingHistoryEntry.displayAmount != null
-                  let finalOrders: Order[]
-                  let newDisplayAmount: number | undefined
-                  if (isSplitCard) {
-                    finalOrders = [...editingHistoryEntry.orders]
-                    const baseTotal = editingHistoryEntry.displayAmount ?? 0
-                    const diff = Math.round((totalFromInput - baseTotal) * 100) / 100
-                    if (Math.abs(diff) >= 0.01) {
-                      finalOrders = [
-                        ...finalOrders,
-                        {
-                          id: crypto.randomUUID(),
-                          description: 'Ajuste',
-                          amount: diff,
-                          date: finalOrders[0]?.date ?? todayISO(),
-                          quantity: 1,
-                        } as Order,
-                      ]
-                    }
-                    newDisplayAmount = totalFromInput
-                  } else {
-                    finalOrders = [...editingHistoryEntry.orders]
-                    const sumItems = finalOrders.reduce((s, o) => s + o.amount, 0)
-                    const diff = Math.round((totalFromInput - sumItems) * 100) / 100
-                    if (Math.abs(diff) >= 0.01) {
-                      finalOrders = [
-                        ...finalOrders,
-                        {
-                          id: crypto.randomUUID(),
-                          description: 'Ajuste',
-                          amount: diff,
-                          date: finalOrders[0]?.date ?? todayISO(),
-                          quantity: 1,
-                        } as Order,
-                      ]
-                    }
+                  const isSplitPart = editingHistoryEntry.displayAmount != null
+                  const baseTotal = historyEntryTotal(editingHistoryEntry)
+                  const diff = Math.round((totalFromInput - baseTotal) * 100) / 100
+                  const finalOrders = [...editingHistoryEntry.orders]
+                  if (Math.abs(diff) >= 0.01) {
+                    finalOrders.push({
+                      id: crypto.randomUUID(),
+                      description: 'Ajuste',
+                      amount: diff,
+                      date: finalOrders[0]?.date ?? todayISO(),
+                      quantity: 1,
+                    } as Order)
                   }
+                  const newDisplayAmount = isSplitPart ? totalFromInput : undefined
                   await updateHistoryEntry(editingHistoryEntry.id, {
                     orders: finalOrders,
                     ...(newDisplayAmount !== undefined && { displayAmount: newDisplayAmount }),
@@ -3790,6 +4135,16 @@ const styles = `
     color: #fff;
   }
 
+  .venda-rapida-card .close-account-method-btn--split {
+    border: 1px dashed var(--accent);
+    color: var(--text-muted);
+    background: #e3f2fd;
+  }
+
+  .venda-rapida-card .close-account-method-btn--split:hover {
+    background: #bbdefb;
+  }
+
   .venda-rapida-submit {
     margin-top: 0.5rem;
   }
@@ -3803,10 +4158,6 @@ const styles = `
     position: relative;
   }
 
-  .historico.historico--has-total {
-    padding-bottom: 4rem;
-  }
-
   .historico-header-row {
     flex-shrink: 0;
     display: flex;
@@ -3815,6 +4166,13 @@ const styles = `
     justify-content: space-between;
     gap: 0.75rem;
     padding: 0.5rem 0 0.75rem;
+  }
+
+  .historico-header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
   }
 
   .historico-filters {
@@ -3896,8 +4254,7 @@ const styles = `
   .historico-card {
     display: flex;
     flex-direction: column;
-    height: calc((100vh - 18rem) / 2);
-    min-height: 6rem;
+    max-height: calc(100vh - 25rem);
     background: var(--bg-card);
     border-radius: var(--radius);
     border: 1px solid var(--border);
@@ -4017,6 +4374,42 @@ const styles = `
   .historico-order-amount {
     font-weight: 600;
     color: var(--accent);
+  }
+
+  .historico-card-split-table-wrap {
+    flex-shrink: 0;
+    margin: 0.5rem 1.25rem 0.75rem;
+    padding: 0.5rem;
+    border: 1px dashed var(--accent);
+    border-radius: 8px;
+  }
+
+  .historico-card-split-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+
+  .historico-card-split-table th,
+  .historico-card-split-table td {
+    padding: 0.35rem 0.5rem;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .historico-card-split-table th {
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  .historico-card-split-table td:last-child {
+    text-align: right;
+    font-weight: 600;
+    color: var(--accent);
+  }
+
+  .historico-card-split-table tr:last-child td {
+    border-bottom: none;
   }
 
   .add-overlay {
@@ -4808,6 +5201,42 @@ const styles = `
     background: #8b0000;
   }
 
+  .split-edit-choice-desc {
+    margin-bottom: 0.75rem;
+  }
+
+  .split-edit-choice-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .split-edit-choice-btn {
+    display: block;
+    width: 100%;
+    padding: 0.6rem 1rem;
+    text-align: left;
+    font-size: 0.95rem;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+  }
+
+  .split-edit-choice-btn:hover {
+    border-color: var(--accent);
+    background: var(--accent-muted);
+    color: var(--accent);
+  }
+
+  .split-edit-choice-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--accent-muted);
+  }
+
   .close-account-overlay {
     position: fixed;
     inset: 0;
@@ -5159,18 +5588,14 @@ const styles = `
   }
 
   .historico-total-by-method {
-    position: absolute;
-    bottom: 0.75rem;
-    right: 0.75rem;
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    padding: 0.75rem 1rem;
+    padding: 0.5rem 0.75rem;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
-    z-index: 2;
   }
 
   .historico-total-by-method-label {
